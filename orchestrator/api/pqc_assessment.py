@@ -139,7 +139,7 @@ class RotateIdentityResponse(BaseModel):
 async def get_team_readiness(
     team_id: str = Query(..., min_length=1, description="Team ID"),
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> PQCReadinessResponse:
     """Assess and return PQC readiness score for a team."""
     from orchestrator.core.pqc_assessment import assess_team_pqc_readiness
@@ -207,7 +207,7 @@ async def get_readiness_history(
 async def get_app_readiness(
     app_id: str,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> AppPQCReadinessResponse:
     """Assess and return PQC readiness score for a specific app."""
     from orchestrator.core.pqc_assessment import assess_app_pqc_readiness
@@ -236,7 +236,7 @@ async def get_app_readiness(
 async def assess_hndl(
     body: HNDLAssessRequest,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> HNDLAssessResponse:
     """Assess HNDL (Harvest-Now-Decrypt-Later) risk for a cryptographic configuration."""
     from orchestrator.core.pqc_assessment import assess_hndl_risk
@@ -408,7 +408,7 @@ async def get_agent_identity(
 async def rotate_agent_identity(
     body: RotateIdentityRequest,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> RotateIdentityResponse:
     """Rotate the PQC keypair for an agent."""
     from orchestrator.db.models import AgentIdentity, App

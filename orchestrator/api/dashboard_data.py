@@ -156,7 +156,7 @@ def _apply_team_scope(query, identity: Identity, team_model):
 async def dashboard_summary(
     team_id: Optional[str] = Query(None, description="Filter to specific team UUID"),
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> KpiSummary:
     """KPI cards for the dashboard header."""
 
@@ -291,7 +291,7 @@ async def cost_over_time(
     app_id: Optional[str] = None,
     provider: Optional[str] = None,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> list[TimeSeriesPoint]:
     if team_id:
         identity.assert_team_access(team_id)
@@ -338,7 +338,7 @@ async def by_provider(
     days: int = Query(30, ge=1, le=90),
     team_id: Optional[str] = None,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> list[ProviderBreakdown]:
     if team_id:
         identity.assert_team_access(team_id)
@@ -384,7 +384,7 @@ async def by_app(
     team_id: Optional[str] = None,
     limit: int = Query(20, ge=1, le=100),
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> list[AppBreakdown]:
     if team_id:
         identity.assert_team_access(team_id)
@@ -438,7 +438,7 @@ async def by_team(
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> list[TeamBreakdown]:
     since = _window(days)
     q = (
@@ -482,7 +482,7 @@ async def top_models(
     app_id: Optional[str] = None,
     limit: int = Query(10, ge=1, le=50),
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> list[ModelBreakdown]:
     if team_id:
         identity.assert_team_access(team_id)
@@ -545,7 +545,7 @@ async def recent_alerts(
     unacknowledged_only: bool = False,
     app_id: Optional[str] = None,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> list[AlertSummary]:
     q = select(Alert).where(Alert.fired_at >= _window(7))
 
@@ -579,7 +579,7 @@ async def recent_alerts(
 async def app_status(
     team_id: Optional[str] = None,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> list[AppStatus]:
     from orchestrator.core.config import settings as cfg
     stale_cutoff = _now() - timedelta(minutes=cfg.heartbeat_stale_minutes)
@@ -648,7 +648,7 @@ async def executive_charts(
     days: int = Query(30, ge=1, le=90),
     team_id: Optional[str] = None,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> ExecutiveCharts:
     """Actionable charts for the executive view."""
     if team_id:

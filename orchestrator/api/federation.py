@@ -101,7 +101,7 @@ async def get_status(
 async def record_consent(
     req: ConsentRequest,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> ConsentResponse:
     """Record operator consent for federation participation."""
     identity.assert_permission("platform:admin")
@@ -116,7 +116,7 @@ async def record_consent(
 @federation_router.delete("/consent")
 async def withdraw_consent(
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> dict:
     """Withdraw consent — immediate cessation of all outbound."""
     identity.assert_permission("platform:admin")
@@ -131,7 +131,7 @@ async def withdraw_consent(
 @federation_router.post("/submit")
 async def submit_delta(
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> dict:
     """Manual delta submission (participant mode)."""
     identity.assert_permission("platform:admin")
@@ -173,7 +173,7 @@ async def get_results(
 async def register_peer(
     req: PeerRegisterRequest,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> PeerResponse:
     """Register a consortium peer (hub mode only)."""
     identity.assert_permission("platform:admin")

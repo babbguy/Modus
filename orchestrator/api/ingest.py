@@ -521,7 +521,7 @@ async def ingest_records(
     payload: IngestPayload,
     request: Request,
     raw_key: str = Depends(get_app_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> IngestResponse:
     start = time.perf_counter()
 
@@ -763,7 +763,7 @@ async def _ingest_aggregated(payload: IngestPayload, app) -> IngestResponse:
 async def heartbeat(
     payload: HeartbeatPayload,
     raw_key: str = Depends(get_app_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> HeartbeatResponse:
     app = await _verify_app_key(raw_key, db)
 

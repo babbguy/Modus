@@ -106,7 +106,7 @@ class PDRVerifyResponse(BaseModel):
 async def register_swarm(
     req: SwarmRegisterRequest,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> SwarmResponse:
     """Register a swarm configuration."""
     identity.assert_permission("evaluate:write")
@@ -172,7 +172,7 @@ async def list_swarms(
 async def create_session(
     req: SessionCreateRequest,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> SessionResponse:
     """Create a swarm evaluation session."""
     identity.assert_permission("evaluate:write")
@@ -241,7 +241,7 @@ async def contribute(
     session_id: str,
     req: ContributeRequest,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> dict:
     """Submit a party contribution to a swarm session (encrypted at rest;
     read in plaintext by the evaluator — not privacy-preserving MPC)."""
@@ -313,7 +313,7 @@ async def contribute(
 async def evaluate_session(
     session_id: str,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> EvaluateResponse:
     """Trigger threshold (k-of-n) evaluation for a swarm session (not private MPC)."""
     identity.assert_permission("evaluate:write")

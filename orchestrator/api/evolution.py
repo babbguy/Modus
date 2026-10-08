@@ -234,7 +234,7 @@ async def list_proposals(
 async def accept_proposal(
     proposal_id: str,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Accept an evolved policy proposal — creates GovernancePolicy."""
     proposal = await db.get(EvolutionProposal, proposal_id)
@@ -259,7 +259,7 @@ async def reject_proposal(
     proposal_id: str,
     body: RejectRequest,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Reject an evolved policy proposal with reason."""
     proposal = await db.get(EvolutionProposal, proposal_id)
@@ -281,7 +281,7 @@ async def reject_proposal(
 @evolution_router.post("/trigger")
 async def trigger_evolution(
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Manually trigger an evolution run (admin only)."""
     if not identity.is_platform_admin:

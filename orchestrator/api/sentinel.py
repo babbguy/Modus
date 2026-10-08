@@ -107,7 +107,7 @@ class PatternUpdateRequest(BaseModel):
 async def scan_session(
     body: ScanRequest,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """On-demand TRiSM scan of a session trace."""
     import json
@@ -225,7 +225,7 @@ async def get_threat(
 async def execute_rollback(
     threat_id: str,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Execute the auto-generated rollback plan for a threat."""
     event = await db.get(TRiSMThreatEvent, threat_id)
@@ -301,7 +301,7 @@ async def update_pattern(
     pattern_id: str,
     body: PatternUpdateRequest,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Enable/disable or tune a TRiSM detection pattern."""
     if not identity.is_platform_admin:

@@ -51,7 +51,7 @@ async def list_audit_log(
     actor_id: Optional[str] = Query(None, description="Filter by actor_id"),
     limit: int = Query(50, ge=1, le=500),
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> list[AuditEntry]:
     """List audit log entries, newest first.
 
@@ -102,7 +102,7 @@ async def verify_chain(
         None, ge=1, description="Verify only the most recent N chained entries"
     ),
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> ChainVerifyResponse:
     """Re-derive the audit hash chain and report integrity.
 
@@ -136,7 +136,7 @@ async def audit_public_key(
 @router.post("/audit-log/checkpoint")
 async def create_audit_checkpoint(
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> dict:
     """Sign and persist a checkpoint over the current chain head.
 
@@ -161,7 +161,7 @@ async def create_audit_checkpoint(
 @router.get("/audit-log/export")
 async def export_audit_chain(
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> dict:
     """Export the full audit chain as a signed, offline-verifiable manifest.
 
