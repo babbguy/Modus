@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Release gate** (`e2e/`, workflow `release-gate.yml`, required checks
+  `Release gate (sqlite)` and `Release gate (postgres)`): runs the production
+  image capped at 1 CPU and 1 GiB, on SQLite and on PostgreSQL 16, drives it
+  with the repository's own SDK and a real browser, and fails on stale reads
+  after a write, usage that does not reconcile exactly (8 decimal places)
+  across the overview, cost-over-time, by-app, top-models, finance and session
+  figures, broken enforcement (budget cap, rate-limit throttle, model
+  denylist, degradation ladder, evaluate timeout), undelivered alerts, wrong
+  connection health, any 429 or 5xx, ERROR lines or tracebacks in the server
+  log, dashboard console errors, failed API calls or empty tiles, peak memory
+  above 512 MiB and idle CPU above 5 %. One command runs it locally:
+  `python e2e/run_gate.py --db sqlite|postgres`. See `e2e/README.md`.
 - **Team management**: `GET /api/v1/teams/{id}` (budgets, parent, child teams,
   app / member / policy counts), `PATCH /api/v1/teams/{id}` (name, slug,
   description, department, parent, budgets, budget period, cost center),
