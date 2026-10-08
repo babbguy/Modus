@@ -47,6 +47,29 @@ ALERT_TIERS = [
 # Key: (threshold_id, period_start_iso) → set of tier percentages already fired
 _fired_tiers: dict[tuple[str, str], set[int]] = {}
 
+# Strong references to in-flight delivery tasks. asyncio only keeps weak
+# references to tasks, so an un-referenced fire-and-forget task can be garbage
+# collected mid-flight and the notification silently never sent.
+_delivery_tasks: set["asyncio.Task"] = set()
+
+# ── Delivery result shape (single definition, used by writer AND readers) ─────
+# Alert.notification_result is {channel: channel_result(...)}.
+#   status  : "delivered" | "dead_letter"   (matches NotificationDelivery.status)
+#   success : bool, True iff status == "delivered"
+#   error   : str | None
+# The dashboard Notifications view reads ``success`` (and ``status``); do not
+# change this shape without updating dashboard/js/views/notifications.js.
+DELIVERY_DELIVERED = "delivered"
+DELIVERY_DEAD_LETTER = "dead_letter"
+
+
+def channel_result(status: str, error: Optional[str] = None) -> dict:
+    return {
+        "status": status,
+        "success": status == DELIVERY_DELIVERED,
+        "error": error,
+    }
+
 
 def _fired_tier_key(threshold_id: str, period_start: datetime) -> tuple[str, str]:
     return (str(threshold_id), period_start.isoformat())
@@ -109,21 +132,35 @@ async def evaluate_thresholds() -> int:
         )).scalars().all()
 
         for t in thresholds:
+            pending: list[dict] = []
             try:
-                fired += await _evaluate_one(db, t, now)
+                n = await _evaluate_one(db, t, now, pending)
+                if n:
+                    # The alert rows MUST be durable before anything is delivered:
+                    # delivery records and notification_sent reference the alert id.
+                    await db.commit()
             except Exception:
                 logger.error("Threshold eval failed", exc_info=True,
                              extra={"threshold_id": str(t.id)})
-
-        if fired:
-            await db.commit()
+                try:
+                    await db.rollback()
+                except Exception:
+                    logger.error("Rollback failed after threshold eval error", exc_info=True)
+                # Un-mark tiers whose alert rows were rolled back so they retry.
+                for item in pending:
+                    _fired_tiers.get(item["tier_key"], set()).discard(item["tier_pct"])
+                continue
+            fired += n
+            for item in pending:
+                _schedule_dispatch(item["threshold"], item["alert_data"])
 
     if fired:
         logger.info("Threshold evaluation complete", extra={"alerts_fired": fired})
     return fired
 
 
-async def _evaluate_one(db, t: Threshold, now: datetime) -> int:
+async def _evaluate_one(db, t: Threshold, now: datetime,
+                        pending: Optional[list] = None) -> int:
     """
     Evaluate a single threshold using percentage-based alert tiers.
 
@@ -132,7 +169,15 @@ async def _evaluate_one(db, t: Threshold, now: datetime) -> int:
     already been alerted for this period.
 
     Returns the number of new alerts fired (0–3).
+
+    ``pending`` collects the deliveries to run once the caller has COMMITTED the
+    alert rows (see evaluate_thresholds). When omitted (direct callers), this
+    function commits the session itself and then schedules delivery, so
+    delivery can never race ahead of the alert insert.
     """
+    own_pending = pending is None
+    if own_pending:
+        pending = []
     period_start, period_end = _period_window(t.period, now)
 
     # Map period to aggregation granularity
@@ -140,6 +185,16 @@ async def _evaluate_one(db, t: Threshold, now: datetime) -> int:
         granularity = "hourly"
     else:
         granularity = "daily"
+
+    if t.scope in ("user", "cost_center"):
+        # usage_aggregates carries no user / cost-center dimension, so these
+        # scopes cannot be measured. Evaluating them as team-wide would raise
+        # false alerts; skip loudly instead.
+        logger.warning(
+            "Threshold %s has unsupported scope %r (no per-%s aggregates) - skipped",
+            t.id, t.scope, t.scope,
+        )
+        return 0
 
     metric_col_name = _METRIC_COL_MAP.get(t.metric)
     if not metric_col_name:
@@ -225,6 +280,8 @@ async def _evaluate_one(db, t: Threshold, now: datetime) -> int:
             period_end=period_end,
         )
         db.add(alert)
+        # Assign the primary key now so delivery records can reference it.
+        await db.flush()
 
         logger.warning(
             "Threshold tier breach: %s %s=%s (tier=%d%%, severity=%s, message=%s)",
@@ -254,16 +311,32 @@ async def _evaluate_one(db, t: Threshold, now: datetime) -> int:
             "tier_message": tier_message,
         }
 
-        asyncio.create_task(_dispatch_integrations(t, alert_data))
-
         already_fired.add(tier_pct)
+        pending.append({
+            "threshold": t,
+            "alert_data": alert_data,
+            "tier_key": tier_key,
+            "tier_pct": tier_pct,
+        })
         fired += 1
 
     # Persist fired tiers in memory
     if already_fired:
         _fired_tiers[tier_key] = already_fired
 
+    if own_pending and fired:
+        await db.commit()
+        for item in pending:
+            _schedule_dispatch(item["threshold"], item["alert_data"])
+
     return fired
+
+
+def _schedule_dispatch(threshold: Threshold, alert_data: dict) -> None:
+    """Start delivery for an already-committed alert, keeping a strong task ref."""
+    task = asyncio.create_task(_dispatch_integrations(threshold, alert_data))
+    _delivery_tasks.add(task)
+    task.add_done_callback(_delivery_tasks.discard)
 
 
 async def _dispatch_integrations(threshold: Threshold, alert_data: dict) -> None:
@@ -351,9 +424,9 @@ async def _send_notifications(alert_data: dict) -> None:
                 "Notification channel %s failed after retries — dead-lettered: %s",
                 channel, r,
             )
-            deliveries.append((channel, "dead_letter", str(r)[:1000]))
+            deliveries.append((channel, DELIVERY_DEAD_LETTER, str(r)[:1000]))
         else:
-            deliveries.append((channel, "delivered", None))
+            deliveries.append((channel, DELIVERY_DELIVERED, None))
 
     await _persist_deliveries(alert_data, severity, deliveries)
 
@@ -382,7 +455,7 @@ async def _persist_deliveries(
             any_delivered = False
             result_summary: dict[str, dict] = {}
             for channel, status, err in deliveries:
-                if status == "delivered":
+                if status == DELIVERY_DELIVERED:
                     any_delivered = True
                 db.add(NotificationDelivery(
                     alert_id=alert_id,
@@ -392,9 +465,9 @@ async def _persist_deliveries(
                     last_error=err,
                     # Keep the payload only for dead-letters (enables replay);
                     # delivered rows don't need to duplicate the alert.
-                    payload=alert_data if status == "dead_letter" else None,
+                    payload=alert_data if status == DELIVERY_DEAD_LETTER else None,
                 ))
-                result_summary[channel] = {"status": status, "error": err}
+                result_summary[channel] = channel_result(status, err)
 
             if alert_id:
                 await db.execute(
@@ -514,7 +587,7 @@ async def _http_post_retry(
             last_exc = httpx.HTTPStatusError(
                 f"{resp.status_code}", request=resp.request, response=resp
             )
-        except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError) as exc:
+        except (httpx.TransportError, httpx.HTTPStatusError) as exc:
             last_exc = exc
             if getattr(getattr(exc, "response", None), "status_code", 500) < 500:
                 raise  # 4xx — permanent

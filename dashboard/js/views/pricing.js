@@ -230,8 +230,8 @@ function _renderGlobal(items) {
           ${items.map(p => `<tr>
             <td>${esc(p.provider || '')}</td>
             <td style="font-family:var(--mono);font-size:11px">${esc(p.model || '')}</td>
-            <td>$${Number(p.input_cost_per_1k || p.input_cost || 0).toFixed(4)}</td>
-            <td>$${Number(p.output_cost_per_1k || p.output_cost || 0).toFixed(4)}</td>
+            <td>$${Number(p.input_cost_per_1k || 0).toFixed(4)}</td>
+            <td>$${Number(p.output_cost_per_1k || 0).toFixed(4)}</td>
           </tr>`).join('')}
         </tbody>
       </table>
@@ -269,12 +269,13 @@ function _renderHistory(items) {
         </thead>
         <tbody>
           ${items.map((entry, idx) => {
-            const when = entry.created_at || entry.timestamp || '';
-            const action = esc(entry.action || entry.event_type || 'update');
-            const actor = esc(entry.actor || entry.user_id || entry.changed_by || '—');
+            const when = entry.occurred_at || '';
+            // API actions are past-tense: created | updated | deleted | bulk_imported
+            const action = esc({ created: 'create', updated: 'update', deleted: 'delete', bulk_imported: 'bulk import' }[entry.action] || entry.action || 'update');
+            const actor = esc(entry.actor_id || '—');
 
-            const before = entry.before || entry.old_value || {};
-            const after = entry.after || entry.new_value || {};
+            const before = entry.before || {};
+            const after = entry.after || {};
 
             const provider = esc((after.provider || before.provider || '—'));
             const model = esc((after.model || before.model || '—'));
@@ -282,7 +283,9 @@ function _renderHistory(items) {
             const beforeStr = typeof before === 'object'
               ? `In: $${Number(before.input_cost_per_1k || 0).toFixed(4)} / Out: $${Number(before.output_cost_per_1k || 0).toFixed(4)}`
               : esc(String(before));
-            const afterStr = typeof after === 'object'
+            const afterStr = action === 'bulk import'
+              ? `${Number(after.created || 0)} created / ${Number(after.skipped || 0)} skipped`
+              : typeof after === 'object'
               ? `In: $${Number(after.input_cost_per_1k || 0).toFixed(4)} / Out: $${Number(after.output_cost_per_1k || 0).toFixed(4)}`
               : esc(String(after));
 
@@ -293,7 +296,7 @@ function _renderHistory(items) {
               <td><span style="font-size:10px;padding:2px 6px;border-radius:3px;background:${actionColor}15;color:${actionColor};font-weight:600;text-transform:uppercase">${action}</span></td>
               <td style="font-family:var(--mono);font-size:11px">${provider} / ${model}</td>
               <td style="font-size:11px;color:var(--muted)">${actor}</td>
-              <td style="font-size:10px;font-family:var(--mono);color:var(--muted)">${action === 'create' ? '—' : beforeStr}</td>
+              <td style="font-size:10px;font-family:var(--mono);color:var(--muted)">${action === 'create' || action === 'bulk import' ? '—' : beforeStr}</td>
               <td style="font-size:10px;font-family:var(--mono);color:var(--text)">${action === 'delete' ? '—' : afterStr}</td>
             </tr>`;
           }).join('')}

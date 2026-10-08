@@ -41,17 +41,18 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import statistics
 import time
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Optional
 from urllib import request as urllib_request
 
-from sqlalchemy import text
+from sqlalchemy import func, select, text
 
 from orchestrator.db.models import (
     AnomalyEvent, App, OptimizationRecommendation,
-    SpendForecast, SystemSetting,
+    SpendForecast, SystemSetting, UsageAggregate,
 )
 from orchestrator.db.session import _session_factory, sqlite_dt
 
@@ -218,16 +219,15 @@ async def run_anomaly_scan() -> None:
       3. If z_score >= threshold, create an AnomalyEvent
       4. If AI explanations are enabled and no explanation exists, generate one
 
-    NOTE: Requires PostgreSQL (uses STDDEV_POP, date_trunc). Skipped on SQLite.
+    Portable: runs on SQLite and PostgreSQL. The statistics (mean, population
+    standard deviation) are computed in Python with the stdlib ``statistics``
+    module over at most ``baseline_days`` values per app, so the scan stays
+    cheap and non-blocking.
 
     Safe to run multiple times — deduplicates by checking for existing events
     in the same 1-hour window.
     """
     if _session_factory is None:
-        return
-    from orchestrator.core.config import settings as _cfg
-    if _cfg.is_sqlite:
-        logger.debug("Anomaly scan skipped (SQLite — requires PostgreSQL)")
         return
 
     start = time.perf_counter()
@@ -249,47 +249,59 @@ async def run_anomaly_scan() -> None:
             baseline_start = now - timedelta(days=baseline_days)
             current_window_start = now - timedelta(hours=1)
 
-            # Compute per-app daily cost baseline (mean + std_dev)
-            baseline_q = await db.execute(text("""
-                SELECT
-                    app_id,
-                    team_id,
-                    'cost' AS metric,
-                    AVG(total_cost)                         AS mean_val,
-                    STDDEV_POP(total_cost)                  AS std_val,
-                    COUNT(*)                                AS sample_count
-                FROM usage_aggregates
-                WHERE granularity = 'daily'
-                  AND period_start >= :baseline_start
-                  AND period_start < date_trunc('day', NOW() AT TIME ZONE 'UTC')
-                GROUP BY app_id, team_id
-                HAVING COUNT(*) >= 3
-            """), {"baseline_start": sqlite_dt(baseline_start)})
-
+            # Per-app daily cost baseline (mean + population std dev) over the
+            # complete days before today. Daily rows are per (app, model), so
+            # sum them per day first.
+            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            day_rows = (await db.execute(
+                select(
+                    UsageAggregate.app_id,
+                    UsageAggregate.team_id,
+                    UsageAggregate.period_start,
+                    func.sum(UsageAggregate.total_cost).label("day_cost"),
+                ).where(
+                    UsageAggregate.granularity == "daily",
+                    UsageAggregate.period_start >= baseline_start,
+                    UsageAggregate.period_start < today_start,
+                ).group_by(
+                    UsageAggregate.app_id, UsageAggregate.team_id, UsageAggregate.period_start,
+                )
+            )).all()
+            per_app_days: dict[tuple, list[float]] = {}
+            for r in day_rows:
+                per_app_days.setdefault((str(r.app_id), str(r.team_id)), []).append(
+                    float(r.day_cost or 0)
+                )
             baselines = {
-                (str(r.app_id), str(r.team_id), r.metric): {
-                    "mean": float(r.mean_val or 0),
-                    "std":  float(r.std_val or 0),
-                    "n":    r.sample_count,
+                (app_id, team_id, "cost"): {
+                    "mean": statistics.fmean(vals),
+                    "std": statistics.pstdev(vals),
+                    "n": len(vals),
                 }
-                for r in baseline_q.all()
+                for (app_id, team_id), vals in per_app_days.items()
+                if len(vals) >= 3
             }
 
-            # Compute current-hour actual values
-            current_q = await db.execute(text("""
-                SELECT
-                    app_id,
-                    team_id,
-                    SUM(total_cost)   AS cost_actual,
-                    SUM(call_count)   AS calls_actual
-                FROM usage_aggregates
-                WHERE granularity = 'hourly'
-                  AND period_start >= :window_start
-                GROUP BY app_id, team_id
-            """), {"window_start": sqlite_dt(current_window_start)})
+            # Recent spend rate: the previous full hour plus the current
+            # partial hour (hourly rows start on the hour, so this window is
+            # 1-2 h long), extrapolated to a daily-equivalent figure.
+            current_hour = now.replace(minute=0, second=0, microsecond=0)
+            rate_window_start = current_hour - timedelta(hours=1)
+            rate_window_hours = max((now - rate_window_start).total_seconds() / 3600.0, 1.0)
+            current_rows = (await db.execute(
+                select(
+                    UsageAggregate.app_id,
+                    UsageAggregate.team_id,
+                    func.sum(UsageAggregate.total_cost).label("cost_actual"),
+                    func.sum(UsageAggregate.call_count).label("calls_actual"),
+                ).where(
+                    UsageAggregate.granularity == "hourly",
+                    UsageAggregate.period_start >= rate_window_start,
+                ).group_by(UsageAggregate.app_id, UsageAggregate.team_id)
+            )).all()
 
             current_by_app: dict[tuple, dict] = {}
-            for r in current_q.all():
+            for r in current_rows:
                 current_by_app[(str(r.app_id), str(r.team_id))] = {
                     "cost":  float(r.cost_actual or 0),
                     "calls": float(r.calls_actual or 0),
@@ -312,9 +324,8 @@ async def run_anomaly_scan() -> None:
                 actual_data = current_by_app.get((app_id, team_id), {})
                 actual = actual_data.get(metric, 0.0)
 
-                # Normalise hourly actual to daily-equivalent for comparison
-                hour_of_day = now.hour + 1  # hours elapsed today
-                daily_equivalent = (actual / max(hour_of_day, 1)) * 24
+                # Recent hourly rate -> daily-equivalent for comparison
+                daily_equivalent = (actual / rate_window_hours) * 24
 
                 z = (daily_equivalent - baseline["mean"]) / baseline["std"]
 
@@ -355,6 +366,7 @@ async def run_anomaly_scan() -> None:
                         "baseline_days": baseline_days,
                         "sample_count":  baseline["n"],
                         "raw_actual_1h": round(actual, 8),
+                        "rate_window_hours": round(rate_window_hours, 4),
                     },
                 )
                 db.add(event)
@@ -441,13 +453,10 @@ async def run_forecast_update() -> None:
     Writes one SpendForecast row per team per run.
     No external API calls — pure arithmetic.
 
-    NOTE: Requires PostgreSQL (uses date_trunc, ::date cast). Skipped on SQLite.
+    Portable: runs on SQLite and PostgreSQL (daily aggregate rows are
+    day-aligned, so no date_trunc is needed).
     """
     if _session_factory is None:
-        return
-    from orchestrator.core.config import settings as _cfg
-    if _cfg.is_sqlite:
-        logger.debug("Forecast update skipped (SQLite — requires PostgreSQL)")
         return
 
     start = time.perf_counter()
@@ -468,25 +477,25 @@ async def run_forecast_update() -> None:
             days_remaining_month = (days_in_month - now).days
 
             # Fetch daily totals per team
-            daily_q = await db.execute(text("""
-                SELECT
-                    team_id,
-                    date_trunc('day', period_start)::date  AS day,
-                    SUM(total_cost)                        AS daily_cost
-                FROM usage_aggregates
-                WHERE granularity = 'daily'
-                  AND period_start >= :window_start
-                GROUP BY team_id, date_trunc('day', period_start)::date
-                ORDER BY team_id, day
-            """), {"window_start": sqlite_dt(window_start)})
+            daily_rows = (await db.execute(
+                select(
+                    UsageAggregate.team_id,
+                    UsageAggregate.period_start,
+                    func.sum(UsageAggregate.total_cost).label("daily_cost"),
+                ).where(
+                    UsageAggregate.granularity == "daily",
+                    UsageAggregate.period_start >= window_start,
+                ).group_by(UsageAggregate.team_id, UsageAggregate.period_start)
+                .order_by(UsageAggregate.team_id, UsageAggregate.period_start)
+            )).all()
 
             # Group by team
             team_days: dict[str, list[tuple[int, float]]] = {}
-            for r in daily_q.all():
+            for r in daily_rows:
                 tid = str(r.team_id)
                 if tid not in team_days:
                     team_days[tid] = []
-                team_days[tid].append((r.day.toordinal(), float(r.daily_cost or 0)))
+                team_days[tid].append((r.period_start.date().toordinal(), float(r.daily_cost or 0)))
 
             teams_processed = 0
             for team_id, day_costs in team_days.items():
@@ -499,13 +508,14 @@ async def run_forecast_update() -> None:
                 slope, intercept, r_sq = _ols_forecast(xs, ys)
 
                 # MTD actual
+                month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
                 mtd_q = await db.execute(text("""
                     SELECT COALESCE(SUM(total_cost), 0) AS mtd
                     FROM usage_aggregates
                     WHERE team_id = :tid
                       AND granularity = 'daily'
-                      AND period_start >= date_trunc('month', NOW() AT TIME ZONE 'UTC')
-                """), {"tid": team_id})
+                      AND period_start >= :month_start
+                """), {"tid": team_id, "month_start": sqlite_dt(month_start)})
                 mtd = float((mtd_q.scalar() or 0))
 
                 # Project remaining days
