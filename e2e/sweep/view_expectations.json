@@ -1,0 +1,140 @@
+{
+  "_comment": [
+    "Per-view expectations for the browser sweep (e2e/sweep/sweep.mjs).",
+    "tilesWithData: tile ids that the gate's traffic and scenarios guarantee have data; [id, n] also requires at least n table rows.",
+    "textIncludes: text the view must show; {label} and {traffic_team} are filled in per run.",
+    "allowedApiErrors: regexes of 'STATUS METHOD /path' a view triggers on purpose (none today).",
+    "Views without entries are still checked for console errors, failed API calls, broken text and tiles stuck loading or in error."
+  ],
+  "views": {
+    "overview": {
+      "tilesWithData": [
+        "overview-kpis",
+        "overview-cost-chart",
+        "overview-providers",
+        [
+          "overview-top-apps",
+          4
+        ],
+        [
+          "overview-top-models",
+          4
+        ],
+        "overview-alerts",
+        "overview-agents"
+      ]
+    },
+    "apps": {
+      "tilesWithData": [
+        [
+          "apps-table",
+          4
+        ]
+      ],
+      "textIncludes": [
+        "gate-app-a-{label}",
+        "gate-burst-{label}"
+      ]
+    },
+    "alerts": {
+      "tilesWithData": [
+        "alerts-stats",
+        [
+          "alerts-table",
+          2
+        ],
+        [
+          "thresholds-table",
+          1
+        ]
+      ]
+    },
+    "pricing": {
+      "tilesWithData": [
+        "pricing-global"
+      ]
+    },
+    "notifications": {
+      "tilesWithData": [
+        "notif-config",
+        "notif-delivery"
+      ]
+    },
+    "settings": {
+      "tilesWithData": [
+        "settings-form"
+      ]
+    },
+    "connections": {
+      "tilesWithData": [
+        "conn-summary",
+        "conn-notif"
+      ]
+    },
+    "topology": {
+      "textIncludes": [
+        "gate-app-a-{label}"
+      ]
+    },
+    "sessions": {
+      "tilesWithData": [
+        [
+          "sessions-list",
+          10
+        ]
+      ]
+    },
+    "help": {},
+    "devops": {
+      "tilesWithData": [
+        "devops-kpis",
+        "devops-enforcement",
+        "devops-providers",
+        "devops-agents"
+      ]
+    },
+    "executive": {
+      "tilesWithData": [
+        "exec-kpis"
+      ]
+    },
+    "finance": {
+      "tilesWithData": [
+        "fin-kpis",
+        "fin-spend-trend",
+        "fin-provider-bar"
+      ]
+    },
+    "routing": {},
+    "policies": {
+      "tilesWithData": [
+        [
+          "policies-table",
+          5
+        ],
+        "policies-decisions"
+      ]
+    },
+    "teams": {
+      "tilesWithData": [
+        [
+          "teams-table",
+          3
+        ]
+      ],
+      "textIncludes": [
+        "{traffic_team}"
+      ]
+    },
+    "governance": {},
+    "compliance": {},
+    "federation": {},
+    "sentinel": {},
+    "admin": {
+      "tilesWithData": [
+        "admin-panel"
+      ]
+    },
+    "profile": {}
+  }
+}

@@ -42,6 +42,11 @@ Please run both before opening a pull request, and add or update tests for any
 behaviour you change. Tests use an in-memory SQLite database and need no
 external services.
 
+Pull requests into `develop` and `main` must also pass the release gate
+(`Release gate (sqlite)` and `Release gate (postgres)`), which runs the real
+Docker image with real SDK traffic and a browser; run it locally with
+`python e2e/run_gate.py --db sqlite` (see [e2e/README.md](e2e/README.md)).
+
 ## Project conventions
 
 - **The SDK stays standard-library only.** Do not add third-party imports to

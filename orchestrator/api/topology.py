@@ -56,6 +56,9 @@ router = APIRouter()
 
 _TEAM_TOKEN_PREFIX = "mds_team_"
 _TEAM_TOKEN_BCRYPT_ROUNDS = 8
+# Cost for the stable key of a self-registered app, whose plaintext is never
+# returned or stored (see self_register).
+_DISCARDED_KEY_BCRYPT_ROUNDS = 4
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -205,13 +208,6 @@ async def self_register(
     safe_app_id = _make_safe_app_id(body.app_id)
     now = datetime.now(timezone.utc)
 
-    # Generate a stable key only for the INSERT path (new apps).
-    # We include it in the upsert but DO NOT update it on conflict —
-    # the existing key stays intact.
-    new_stable_key = _generate_app_key()
-    new_key_hash = await asyncio.to_thread(_hash_key, new_stable_key)
-    new_app_uuid = str(__import__("uuid").uuid4())
-
     # Check if app already exists (needed for SQLite path, avoids .returning())
     existing_app = (await db.execute(
         select(App).where(App.team_id == str(team.id), App.app_id == safe_app_id, App.deleted_at.is_(None))
@@ -226,6 +222,18 @@ async def self_register(
         app_uuid = str(existing_app.id)
         newly_created = False
     else:
+        # A new app gets a stable mds_ key only so the row has one; the agent
+        # authenticates with the session token below and the plaintext key is
+        # discarded right here (an admin issues a usable key with rotate-key).
+        # Nobody can ever present this key, and it is 32 random characters,
+        # so the bcrypt cost factor protects nothing: hash it at the minimum
+        # cost. At the default cost (12, about 0.3-0.6 s of CPU) every
+        # registration, reconnects included, burned that much CPU, and a few
+        # apps starting at once on a 1-CPU server pushed registration past
+        # the SDK's 3 s timeout, which disables governance for that process.
+        new_stable_key = _generate_app_key()
+        new_key_hash = await asyncio.to_thread(_hash_key, new_stable_key, _DISCARDED_KEY_BCRYPT_ROUNDS)
+        new_app_uuid = str(__import__("uuid").uuid4())
         app_obj = App(
             id=new_app_uuid,
             team_id=str(team.id),
