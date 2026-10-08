@@ -42,6 +42,23 @@ def _reset_gateway_circuit():
     get_breaker().reset()
 
 
+@pytest.fixture(autouse=True)
+def _reset_api_rate_limiters():
+    """The API rate limiters are process-global sliding windows keyed by API
+    key or client IP. Every ASGI test client shares one IP, so without a reset
+    a fast run accumulates >250 requests/minute across test files and later
+    tests get 429s depending on execution speed."""
+    import sys
+    main = sys.modules.get("orchestrator.main")
+    if main is not None:
+        for name in ("_rate_limiter", "_sdk_rate_limiter"):
+            limiter = getattr(main, name, None)
+            if limiter is not None:
+                with limiter._lock:
+                    limiter._counters.clear()
+    yield
+
+
 @pytest_asyncio.fixture
 async def engine():
     eng = create_async_engine("sqlite+aiosqlite:///:memory:")
