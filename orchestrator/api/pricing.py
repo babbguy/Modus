@@ -334,10 +334,7 @@ async def update_override(
     if override.team_id:
         identity.assert_team_access(str(override.team_id))
 
-    before = {
-        "input_cost_per_1k": str(override.input_cost_per_1k),
-        "output_cost_per_1k": str(override.output_cost_per_1k),
-    }
+    before = _audit_snapshot(override)
 
     if body.input_cost_per_1k is not None:
         override.input_cost_per_1k = body.input_cost_per_1k
@@ -360,10 +357,20 @@ async def update_override(
         resource_id=override_id,
         action="updated",
         before=before,
-        after=body.model_dump(exclude_none=True, mode="json"),
+        after=_audit_snapshot(override),
     ))
 
     return _override_to_response(override)
+
+
+def _audit_snapshot(override: PricingOverride) -> dict:
+    """Full identifying state of an override for the audit trail (before/after)."""
+    return {
+        "provider": override.provider,
+        "model": override.model,
+        "input_cost_per_1k": str(override.input_cost_per_1k),
+        "output_cost_per_1k": str(override.output_cost_per_1k),
+    }
 
 
 @router.delete(
@@ -396,7 +403,7 @@ async def delete_override(
         resource_type="pricing_override",
         resource_id=override_id,
         action="deleted",
-        before={"provider": override.provider, "model": override.model},
+        before=_audit_snapshot(override),
     ))
 
 

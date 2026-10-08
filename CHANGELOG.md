@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `POST /api/v1/teams/{id}/restore` and `GET /api/v1/teams?include_deleted=true`.
   Every change is audit-logged with before and after values. The dashboard
   Teams view gains Edit, Delete (with app reassignment) and Restore.
+- `GET /api/v1/insights/ops-kpis` (live cost this hour, blocked and throttled
+  calls, tokens per call and mean latency for the DevOps view), plus new response
+  fields listed under "API conventions" in `docs/ARCHITECTURE.md`.
 
 ### Fixed
 
@@ -25,6 +28,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it now returns a 409 explaining the slug is reserved.
 - The dashboard Create Team request dropped its authentication headers when the
   dashboard was signed in with a master key or JWT.
+- Insights (anomalies, recommendations, enforcement summary) and the ROI report
+  were empty for stub-mode, master-key and platform-admin identities because
+  they filtered on `identity.team_id`, which is `None` for admins. Admins now see
+  every team (optionally narrowed with `?team_id=`); other identities see only
+  their own teams, and an identity with no teams sees nothing. The same
+  "no team means everyone" fallback is removed from the apps list, top models,
+  CoT ledger, Sentinel, attestation and ZK-proof statistics, and evolution status.
+- Timestamps are timezone-aware UTC everywhere. SQLite returned naive datetimes
+  that serialised without an offset, so browsers parsed them as local time and
+  showed negative "ago" values. A `UTCDateTime` column type now normalises reads
+  and writes on both databases, and the places that stringified timestamps by
+  hand use `isoformat()`.
+- Dashboard tiles that read fields the API never sent now read the documented
+  names: Governance (CoT ledger `decision_summary` / `created_at` / `linked_*`,
+  chain verification, evolution status), Sentinel (blocked and critical counts,
+  threat action / confidence / time, ZK coverage), Compliance (Merkle roots, PQC
+  algorithms), Finance (chargeback rollup and period, cost centers, create
+  payload, spend trend), Pricing history, Executive (ROI, model risk share, team
+  names, narrative), DevOps (anomalies, recommendations, enforcement, severity
+  colours) and Federation. See "API conventions" in `docs/ARCHITECTURE.md`.
+- The DevOps KPIs no longer invent numbers: "Cost This Session" (a fixed 4.8% of
+  daily spend) and "P95 Latency" (a hard-coded 1,240 ms fallback) are replaced by
+  "Cost This Hour" and "Avg Latency" from the new `GET /insights/ops-kpis`; the
+  Executive ROI tile no longer assumes a $68 platform cost.
+- The Apps view shows each app's enforcement state (active, budget suspended,
+  rate limited, admin suspended) with the reason and time.
+- The Nomus panel in Settings always showed 0 regulations: it read
+  `regulations_count`, which the status endpoint never returned. The status and
+  sync responses now carry `regulation_count`.
+- Pricing-override audit entries recorded only the changed fields (updates) or
+  only provider and model (deletes); they now carry the full before and after
+  state so the history tile can show it.
+- "Calls Allowed" on the DevOps enforcement tile was always 0 because allow
+  decisions are not stored; it is now metered calls minus blocked and throttled.
 
 ## [1.0.0] - 2026-10-07 - Initial public release
 

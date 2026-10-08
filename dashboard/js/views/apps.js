@@ -117,6 +117,26 @@ function _renderTable(apps) {
     return `<span style="font-family:var(--mono);font-size:10px;padding:2px 6px;border-radius:3px;background:${bg};color:${color}">${esc(env || 'dev')}</span>`;
   };
 
+  // Runtime enforcement state from GET /apps: active | budget_suspended |
+  // rate_limited | admin_suspended, with the reason and time it was set.
+  const ENFORCEMENT = {
+    active:           { label: 'Active',           color: 'var(--accent)' },
+    budget_suspended: { label: 'Budget suspended', color: 'var(--danger)' },
+    rate_limited:     { label: 'Rate limited',     color: '#f59e0b' },
+    admin_suspended:  { label: 'Admin suspended',  color: 'var(--danger)' },
+  };
+  const enforcementBadge = (a) => {
+    const state = a.enforcement_state || 'active';
+    const meta = ENFORCEMENT[state] || { label: state.replace(/_/g, ' '), color: 'var(--muted)' };
+    const since = a.enforcement_suspended_at ? `Since ${new Date(a.enforcement_suspended_at).toLocaleString()}` : '';
+    const reason = a.enforcement_suspended_reason || '';
+    const title = [reason, since].filter(Boolean).join(' \u2014 ');
+    const detail = state !== 'active' && reason
+      ? `<div style="font-size:10px;color:var(--muted);max-width:220px;white-space:normal;margin-top:2px">${esc(reason)}</div>`
+      : '';
+    return `<span title="${esc(title)}" style="color:${meta.color};font-weight:500">${esc(meta.label)}</span>${detail}`;
+  };
+
   body.innerHTML = `
     <div style="overflow-x:auto">
       <table class="ds-table" style="width:100%;font-size:12px">
@@ -127,6 +147,7 @@ function _renderTable(apps) {
             <th>Team</th>
             <th>Environment</th>
             <th>Status</th>
+            <th>Enforcement</th>
             <th>Agent</th>
             <th>Last Seen</th>
             <th>Actions</th>
@@ -144,6 +165,7 @@ function _renderTable(apps) {
               <td><span style="color:var(--muted)">${esc(a.team_slug || '')}</span></td>
               <td>${envBadge(a.environment)}</td>
               <td>${status}</td>
+              <td>${enforcementBadge(a)}</td>
               <td style="font-family:var(--mono);font-size:11px">${esc(a.agent_version || '\u2014')}</td>
               <td style="font-size:11px;color:var(--muted)">${lastSeen}</td>
               <td>

@@ -24,7 +24,7 @@ from pydantic import BaseModel
 from sqlalchemy import select, func, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from orchestrator.core.auth import get_identity, Identity
+from orchestrator.core.auth import get_identity, Identity, team_scope_clause
 from orchestrator.db.models import CoTLedgerEntry
 from orchestrator.db.session import get_session
 
@@ -71,6 +71,7 @@ class ChainVerifyResponse(BaseModel):
     entries_checked: int
     first_invalid_seq: Optional[int]
     error: Optional[str]
+    teams_checked: int = 1
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -94,8 +95,8 @@ async def list_entries(
     if team_id:
         identity.assert_team_access(team_id)
         query = query.where(CoTLedgerEntry.team_id == team_id)
-    elif not identity.is_platform_admin and identity.team_ids:
-        query = query.where(CoTLedgerEntry.team_id.in_(identity.team_ids))
+    else:
+        query = query.where(team_scope_clause(CoTLedgerEntry.team_id, identity.visible_team_ids()))
 
     if decision_type:
         query = query.where(CoTLedgerEntry.decision_type == decision_type)
@@ -149,19 +150,45 @@ async def verify_chain(
     identity: Identity = Depends(get_identity),
     db: AsyncSession = Depends(get_session),
 ) -> ChainVerifyResponse:
-    """Verify the hash chain integrity for a team."""
+    """Verify the hash chain integrity.
+
+    With ``team_id`` one team's chain is verified. Without it every chain the
+    caller can see is verified (all teams for a platform admin) and the result
+    is aggregated: ``valid`` only if every chain is intact, ``entries_checked``
+    summed, and ``first_invalid_seq`` / ``error`` describing the first break.
+    """
     from orchestrator.core.cot_ledger import verify_chain as _verify
 
-    # If no team_id, use the first team the user has access to
-    if not team_id:
-        if identity.team_ids:
-            team_id = identity.team_ids[0]
-        else:
-            return ChainVerifyResponse(valid=True, entries_checked=0, first_invalid_seq=None, error=None)
+    if team_id:
+        identity.assert_team_access(team_id)
+        result = await _verify(db, team_id, start_seq, end_seq)
+        return ChainVerifyResponse(**result, teams_checked=1)
 
-    identity.assert_team_access(team_id)
-    result = await _verify(db, team_id, start_seq, end_seq)
-    return ChainVerifyResponse(**result)
+    teams = identity.visible_team_ids()
+    if teams is None:
+        rows = await db.execute(select(CoTLedgerEntry.team_id).distinct())
+        teams = sorted(str(r[0]) for r in rows.all())
+
+    checked = 0
+    bad: Optional[dict] = None
+    bad_team: Optional[str] = None
+    for t in teams:
+        res = await _verify(db, t, start_seq, end_seq)
+        checked += int(res.get("entries_checked") or 0)
+        if not res.get("valid") and bad is None:
+            bad, bad_team = res, t
+    if bad is not None:
+        return ChainVerifyResponse(
+            valid=False,
+            entries_checked=checked,
+            first_invalid_seq=bad.get("first_invalid_seq"),
+            error=f"team {bad_team}: {bad.get('error')}",
+            teams_checked=len(teams),
+        )
+    return ChainVerifyResponse(
+        valid=True, entries_checked=checked, first_invalid_seq=None, error=None,
+        teams_checked=len(teams),
+    )
 
 
 @router.get("/stats", response_model=CoTStatsResponse)
@@ -175,8 +202,8 @@ async def get_stats(
     if team_id:
         identity.assert_team_access(team_id)
         base_filter.append(CoTLedgerEntry.team_id == team_id)
-    elif not identity.is_platform_admin and identity.team_ids:
-        base_filter.append(CoTLedgerEntry.team_id.in_(identity.team_ids))
+    else:
+        base_filter.append(team_scope_clause(CoTLedgerEntry.team_id, identity.visible_team_ids()))
 
     # Total count
     total = await db.execute(
@@ -236,8 +263,8 @@ async def export_entries(
     if team_id:
         identity.assert_team_access(team_id)
         query = query.where(CoTLedgerEntry.team_id == team_id)
-    elif not identity.is_platform_admin and identity.team_ids:
-        query = query.where(CoTLedgerEntry.team_id.in_(identity.team_ids))
+    else:
+        query = query.where(team_scope_clause(CoTLedgerEntry.team_id, identity.visible_team_ids()))
 
     if date_from:
         query = query.where(CoTLedgerEntry.created_at >= date_from)

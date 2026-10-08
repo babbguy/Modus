@@ -7,7 +7,7 @@
 
 import { initGrid, addTiles, loadLayout } from '../grid.js';
 import { createTile, setTileLoading, setTileEmpty, setTileError, setTileMeta, exportActions } from '../tile.js';
-import { apiFetch, rawFetch, esc } from '../api.js';
+import { apiFetch, rawFetch, esc, loadAppNames, appName } from '../api.js';
 import { fmtCost, fmtTokens, fmtNum, fmtDate, fmtDateSmart, timeSince, providerColor } from '../format.js';
 import { get, subscribe, unsubscribe } from '../state.js';
 import { openModal } from '../modal.js';
@@ -187,6 +187,7 @@ function _createAgentsTile() {
 // ── Data fetching ────────────────────────────────────────────────────────────
 
 async function loadData() {
+  await loadAppNames();
   if (_destroyed) return;
 
   const days = get('currentDays') || 7;
@@ -781,7 +782,7 @@ function _renderAlerts(items) {
             ${esc(a.metric || 'Alert')}${acked}
           </div>
           <div style="font-size:11px;color:var(--muted);margin-top:2px">
-            actual ${fmtCost(a.actual_value)} \u00b7 threshold ${fmtCost(a.threshold_value)}${a.app_id ? ` \u00b7 ${esc(a.app_id)}` : ''}
+            actual ${fmtCost(a.actual_value)} \u00b7 threshold ${fmtCost(a.threshold_value)}${a.app_id ? ` \u00b7 ${esc(appName(a.app_id))}` : ''}
           </div>
         </div>
         <div style="font-size:10px;color:var(--muted);white-space:nowrap;flex-shrink:0">${a.fired_at ? timeSince(a.fired_at) : ''}</div>
@@ -878,7 +879,7 @@ function _showAlertModal(alert) {
             <span style="color:var(--muted)">Threshold</span>
             <span style="font-family:var(--mono);color:var(--text)">${fmtCost(alert.threshold_value)}</span>
             <span style="color:var(--muted)">App</span>
-            <span style="color:var(--text)">${esc(alert.app_id || 'All apps')}</span>
+            <span style="color:var(--text)">${esc(appName(alert.app_id) || 'All apps')}</span>
             <span style="color:var(--muted)">Team</span>
             <span style="color:var(--text)">${esc(alert.team_slug || alert.team_id || '\u2014')}</span>
             <span style="color:var(--muted)">Fired At</span>

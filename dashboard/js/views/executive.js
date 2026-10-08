@@ -280,14 +280,14 @@ async function loadData() {
     forecast_eom: totalForecastEom || financeSummary?.total_projected_eom_usd || 0,
     period_cost: periodCost,
     period_label: `${days}D`,
-    roi_savings: roi?.total_savings ?? 0,
+    roi_savings: roi?.estimated_savings ?? 0,
     active_teams: summary.active_teams ?? 0,
     cost_per_1k: summary.cost_per_1k_tokens ?? 0,
   } : null;
 
   // Render each section independently — one failure never blocks others
   try { _renderKpis(kpis); } catch (e) { console.warn('[executive] kpis:', e); }
-  try { _renderNarrative(summary, teams, models); } catch (e) { console.warn('[executive] narrative:', e); }
+  try { _renderNarrative(summary, teams, models, roi); } catch (e) { console.warn('[executive] narrative:', e); }
   try { _renderForecast(costOverTime, forecast); } catch (e) { console.warn('[executive] forecast:', e); }  // cumulative MTD chart
   try { _renderSavings(execCharts); } catch (e) { console.warn('[executive] savings:', e); }
   try { _renderChargeback(teams); } catch (e) { console.warn('[executive] chargeback:', e); }
@@ -342,7 +342,7 @@ function _renderKpis(k) {
   `;
 }
 
-async function _renderNarrative(summary, teams, models) {
+async function _renderNarrative(summary, teams, models, roi) {
   const body = document.getElementById('exec-narrative-body');
   if (!body) return;
 
@@ -353,28 +353,28 @@ async function _renderNarrative(summary, teams, models) {
   }
 
   // Build narrative from live data (no external API calls — data sovereignty)
-  const text = _buildLocalNarrative(summary, teams, models);
+  const text = _buildLocalNarrative(summary, teams, models, roi);
   _narrativeCache = text;
   _narrativeTs = Date.now();
 
   body.style.padding = '16px 24px'; body.innerHTML = `<div class="exec-narrative" style="font-size:13px;line-height:1.7;color:var(--text)">${esc(text)}</div>`;
 }
 
-function _buildLocalNarrative(summary, teams, models) {
+function _buildLocalNarrative(summary, teams, models, roi) {
   if (!summary) {
     return 'No usage data available yet. Connect your first application to begin tracking AI spend.';
   }
   const s = summary;
-  const totalSpend = s.total_cost_mtd ?? s.total_cost_30d ?? s.total_cost_usd ?? s.total_cost ?? 0;
-  const totalCalls = s.total_calls_mtd ?? s.total_calls ?? s.total_records ?? 0;
+  const totalSpend = s.total_cost_mtd ?? 0;
+  const totalCalls = s.total_calls_mtd ?? 0;
   const avgCost = totalCalls > 0 ? totalSpend / totalCalls : 0;
-  const topTeams = (teams || []).slice(0, 3).map(t => t.team_slug || t.team || 'unknown');
+  const topTeams = (teams || []).slice(0, 3).map(t => t.team_name || t.team_slug || 'unknown');
   const topModels = (models || []).slice(0, 3).map(m => m.model || 'unknown');
-  const denied = s.policy_denials || s.denied || 0;
+  const denied = roi?.blocked_calls || 0;
 
   const spendStr = totalSpend >= 1000 ? '$' + (totalSpend / 1000).toFixed(1) + 'k' : '$' + totalSpend.toFixed(2);
   const parts = [];
-  parts.push(`Total AI spend over the past 30 days is ${spendStr} across ${totalCalls.toLocaleString()} calls (avg ${avgCost < 0.01 ? '<$0.01' : '$' + avgCost.toFixed(3)}/call).`);
+  parts.push(`Total AI spend month to date is ${spendStr} across ${totalCalls.toLocaleString()} calls (avg ${avgCost < 0.01 ? '<$0.01' : '$' + avgCost.toFixed(3)}/call).`);
   if (topTeams.length) parts.push(`Top spending teams: ${topTeams.join(', ')}.`);
   if (topModels.length) parts.push(`Most-used models: ${topModels.join(', ')}.`);
   if (denied > 0) parts.push(`Policy enforcement blocked ${denied} request${denied !== 1 ? 's' : ''}.`);
@@ -605,12 +605,12 @@ function _renderChargeback(items) {
     return;
   }
 
-  const total = items.reduce((s, t) => s + parseFloat(t.cost ?? t.total_cost ?? 0), 0);
+  const total = items.reduce((s, t) => s + parseFloat(t.cost ?? 0), 0);
   body.innerHTML = items.map(t => {
-    const cost = parseFloat(t.cost ?? t.total_cost ?? 0);
-    const pct = total > 0 ? (cost / total * 100) : (t.pct ?? 0);
+    const cost = parseFloat(t.cost ?? 0);
+    const pct = total > 0 ? (cost / total * 100) : 0;
     return `<div class="chargeback-row" style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--border)">
-      <span class="chargeback-team" style="font-size:12px;font-weight:500;color:var(--text);min-width:100px">${esc(t.team ?? t.team_slug ?? '')}</span>
+      <span class="chargeback-team" style="font-size:12px;font-weight:500;color:var(--text);min-width:100px">${esc(t.team_name ?? t.team_slug ?? '')}</span>
       <div class="chargeback-bar" style="flex:1;height:6px;border-radius:3px;background:var(--border);overflow:hidden">
         <div class="chargeback-fill" style="width:${pct.toFixed(0)}%;height:100%;background:var(--accent);border-radius:3px;transition:width 0.5s ease"></div>
       </div>
@@ -699,7 +699,7 @@ function _renderRoi(r) {
   body.innerHTML = `
     <div style="text-align:center;padding:12px 0 16px;border-bottom:1px solid var(--border);margin-bottom:8px">
       <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Net Savings This Month</div>
-      <div style="font-size:28px;font-weight:700;color:var(--accent)">${fmtCost(r.net_roi ?? r.total_savings)}</div>
+      <div style="font-size:28px;font-weight:700;color:var(--accent)">${fmtCost(r.net_savings)}</div>
       <div style="font-size:11px;color:var(--muted);margin-top:4px">${r.roi_multiple ? r.roi_multiple.toFixed(1) + 'x ROI on platform cost' : 'enforcement savings'}</div>
     </div>
     <div class="roi-rows" style="font-size:12px">
@@ -709,19 +709,19 @@ function _renderRoi(r) {
       </div>
       <div style="display:flex;justify-content:space-between;padding:6px 12px;border-bottom:1px solid var(--border)">
         <span style="color:var(--muted)">Avg cost per blocked call</span>
-        <span style="font-family:var(--mono);color:var(--text)">$${(r.cost_per_blocked ?? 0).toFixed(4)}</span>
+        <span style="font-family:var(--mono);color:var(--text)">${r.cost_per_blocked != null ? '$' + r.cost_per_blocked.toFixed(4) : '—'}</span>
       </div>
       <div style="display:flex;justify-content:space-between;padding:6px 12px;border-bottom:1px solid var(--border)">
         <span style="color:var(--muted)">Gross savings</span>
-        <span style="font-family:var(--mono);color:var(--text)">${fmtCost(r.total_savings)}</span>
+        <span style="font-family:var(--mono);color:var(--text)">${fmtCost(r.estimated_savings)}</span>
       </div>
       <div style="display:flex;justify-content:space-between;padding:6px 12px;border-bottom:1px solid var(--border)">
         <span style="color:var(--muted)">Platform cost (est.)</span>
-        <span style="font-family:var(--mono);color:var(--text)">${fmtCost(r.platform_cost ?? 68)}</span>
+        <span style="font-family:var(--mono);color:var(--text)">${fmtCost(r.platform_cost_usd)}</span>
       </div>
       <div style="display:flex;justify-content:space-between;padding:6px 12px;font-weight:700">
         <span style="color:var(--muted)">Net</span>
-        <span style="font-family:var(--mono);color:var(--accent)">${fmtCost(r.net_roi ?? r.total_savings)}</span>
+        <span style="font-family:var(--mono);color:var(--accent)">${fmtCost(r.net_savings)}</span>
       </div>
     </div>
   `;
@@ -741,12 +741,12 @@ function _renderModelRisk(items) {
   }
 
   body.innerHTML = items.map(m => {
-    const pct = parseFloat(m.pct ?? m.cost_pct ?? 0);
+    const pct = parseFloat(m.pct ?? 0);
     const modelName = esc((m.model ?? '').split('-').slice(0, 3).join('-'));
     return `<div style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--border)">
       <span style="font-size:12px;font-weight:500;color:var(--text);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${modelName}</span>
       <span style="font-family:var(--mono);font-size:11px;color:var(--muted);min-width:44px;text-align:right">${pct.toFixed(1)}%</span>
-      <span style="font-family:var(--mono);font-size:12px;font-weight:600;color:var(--text);min-width:70px;text-align:right">${fmtCost(m.cost ?? m.total_cost)}</span>
+      <span style="font-family:var(--mono);font-size:12px;font-weight:600;color:var(--text);min-width:70px;text-align:right">${fmtCost(m.cost)}</span>
     </div>`;
   }).join('');
 }

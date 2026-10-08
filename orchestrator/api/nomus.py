@@ -52,6 +52,7 @@ class NomusStatusResponse(BaseModel):
     sync_interval_seconds: int = 21600
     sync_count: int = 0
     policy_count: int = 0
+    regulation_count: int = 0
     jurisdictions: list[str] = []
     categories: list[str] = []
     severity_counts: dict[str, int] = {}
@@ -61,6 +62,7 @@ class SyncResponse(BaseModel):
     success: bool
     version: str | None = None
     policy_count: int = 0
+    regulation_count: int = 0
     state_hash: str | None = None
     skipped: bool = False
     error: str | None = None
@@ -108,7 +110,8 @@ async def nomus_status(identity: Identity = Depends(get_identity)):
 async def nomus_sync(identity: Identity = Depends(get_identity)):
     """Manually trigger a Nomus ruleset sync."""
     result = await sync_ruleset()
-    return SyncResponse(**result)
+    status_now = await get_status()
+    return SyncResponse(**{**result, "regulation_count": status_now.get("regulation_count", 0)})
 
 
 @router.post("/test", response_model=TestResponse)

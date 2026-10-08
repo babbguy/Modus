@@ -7,7 +7,7 @@
 
 import { initGrid, addTiles, loadLayout } from '../grid.js';
 import { createTile, setTileLoading, setTileEmpty, setTileError, setTileMeta } from '../tile.js';
-import { apiFetch, rawFetch, esc } from '../api.js';
+import { apiFetch, rawFetch, esc, loadAppNames, appName } from '../api.js';
 import { fmtCost, fmtNum } from '../format.js';
 import { get, subscribe, unsubscribe } from '../state.js';
 import { openModal, closeModal } from '../modal.js';
@@ -151,6 +151,7 @@ function _createExclusionsTile() {
 // ── Data fetching ────────────────────────────────────────────────────────────
 
 async function loadData() {
+  await loadAppNames();
   if (_destroyed) return;
 
   setTileLoading('rt-kpis', 'cards');
@@ -435,7 +436,7 @@ function _renderFingerprints(fps) {
             const isPaused = !fp.allow_routing;
             return `<tr data-fp-idx="${idx}">
               <td style="font-family:var(--mono);font-size:11px">${esc((fp.fingerprint_hash || '').slice(0, 8))}</td>
-              <td>${esc(fp.app_id || '')}</td>
+              <td>${esc(appName(fp.app_id))}</td>
               <td><span class="ds-badge-${fp.phase === 'routing' ? 'success' : fp.phase === 'observe' ? 'info' : fp.phase === 'calibrating' ? 'warning' : 'neutral'}">${esc(fp.phase || '')}</span></td>
               <td>
                 <div style="display:flex;align-items:center;gap:6px">
@@ -506,7 +507,7 @@ function _renderExclusions(excluded) {
               : '\u2014';
             return `<tr>
               <td style="font-family:var(--mono);font-size:11px">${esc((fp.fingerprint_hash || '').slice(0, 8))}</td>
-              <td>${esc(fp.app_id || '')}</td>
+              <td>${esc(appName(fp.app_id))}</td>
               <td style="color:var(--muted)">Agreement below threshold</td>
               <td style="font-family:var(--mono);font-size:11px">${agr}</td>
               <td>

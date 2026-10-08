@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from orchestrator.core.auth import Identity, get_identity
+from orchestrator.core.auth import Identity, get_identity, team_scope_clause
 from orchestrator.core.config import settings
 from orchestrator.db.models import App, AuditLog, Team
 from orchestrator.db.session import get_session
@@ -107,6 +107,31 @@ class AppResponse(BaseModel):
     first_seen_at: Optional[datetime]
     is_active: bool
     created_at: datetime
+    # Runtime enforcement: active | budget_suspended | rate_limited | admin_suspended
+    enforcement_state: str = "active"
+    enforcement_suspended_at: Optional[datetime] = None
+    enforcement_suspended_reason: Optional[str] = None
+
+
+def _app_response(app: App, team_slug: Optional[str]) -> AppResponse:
+    return AppResponse(
+        id=str(app.id),
+        app_id=app.app_id,
+        app_name=app.app_name,
+        team_id=str(app.team_id),
+        team_slug=team_slug,
+        environment=app.environment,
+        api_key_prefix=app.api_key_prefix,
+        agent_version=app.agent_version,
+        sdk_versions=app.sdk_versions,
+        last_seen_at=app.last_seen_at,
+        first_seen_at=app.first_seen_at,
+        is_active=app.is_active,
+        created_at=app.created_at,
+        enforcement_state=app.enforcement_state or "active",
+        enforcement_suspended_at=app.enforcement_suspended_at,
+        enforcement_suspended_reason=app.enforcement_suspended_reason,
+    )
 
 
 class AppUpdateRequest(BaseModel):
@@ -329,11 +354,7 @@ async def list_apps(
         query = query.where(App.is_active == True)
 
     # Team scoping — enforced via identity
-    if not identity.is_platform_admin and identity.team_ids:
-        query = query.where(App.team_id.in_(identity.team_ids))
-    elif team_id:
-        identity.assert_team_access(team_id)
-        query = query.where(App.team_id == team_id)
+    query = query.where(team_scope_clause(App.team_id, identity.visible_team_ids(team_id)))
 
     if environment:
         query = query.where(App.environment == environment)
@@ -343,24 +364,7 @@ async def list_apps(
     )
     rows = result.all()
 
-    return [
-        AppResponse(
-            id=str(app.id),
-            app_id=app.app_id,
-            app_name=app.app_name,
-            team_id=str(app.team_id),
-            team_slug=team_slug,
-            environment=app.environment,
-            api_key_prefix=app.api_key_prefix,
-            agent_version=app.agent_version,
-            sdk_versions=app.sdk_versions,
-            last_seen_at=app.last_seen_at,
-            first_seen_at=app.first_seen_at,
-            is_active=app.is_active,
-            created_at=app.created_at,
-        )
-        for app, team_slug in rows
-    ]
+    return [_app_response(app, team_slug) for app, team_slug in rows]
 
 
 @router.get("/apps/{app_uuid}", response_model=AppResponse, summary="Get app detail")
@@ -382,21 +386,7 @@ async def get_app(
     app, team_slug = row
     identity.assert_team_access(str(app.team_id))
 
-    return AppResponse(
-        id=str(app.id),
-        app_id=app.app_id,
-        app_name=app.app_name,
-        team_id=str(app.team_id),
-        team_slug=team_slug,
-        environment=app.environment,
-        api_key_prefix=app.api_key_prefix,
-        agent_version=app.agent_version,
-        sdk_versions=app.sdk_versions,
-        last_seen_at=app.last_seen_at,
-        first_seen_at=app.first_seen_at,
-        is_active=app.is_active,
-        created_at=app.created_at,
-    )
+    return _app_response(app, team_slug)
 
 
 @router.patch("/apps/{app_uuid}", response_model=AppResponse, summary="Update app")
@@ -441,13 +431,7 @@ async def update_app(
         after=body.model_dump(exclude_none=True),
     ))
 
-    return AppResponse(
-        id=str(app.id), app_id=app.app_id, app_name=app.app_name,
-        team_id=str(app.team_id), team_slug=team_slug, environment=app.environment,
-        api_key_prefix=app.api_key_prefix, agent_version=app.agent_version,
-        sdk_versions=app.sdk_versions, last_seen_at=app.last_seen_at,
-        first_seen_at=app.first_seen_at, is_active=app.is_active, created_at=app.created_at,
-    )
+    return _app_response(app, team_slug)
 
 
 @router.delete(
