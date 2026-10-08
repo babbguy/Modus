@@ -12,7 +12,8 @@ Write-heavy endpoints (ingest, heartbeat) use the write queue
 SQLite lock contention. Sessions here are used for reads and low-frequency
 admin writes (registration, thresholds, dashboard queries).
 
-Pool sizing guidance (PostgreSQL only):
+Pool sizing guidance (pool_size, max_overflow and pool_timeout also apply
+to a SQLite file; pool_recycle is PostgreSQL only):
   - pool_size: number of persistent connections. Set to match your
     PostgreSQL max_connections / number of orchestrator replicas.
     Default 10 is appropriate for a single replica behind a small cluster.
@@ -88,17 +89,32 @@ def build_engine() -> AsyncEngine:
     return the cached instance.
     """
     if settings.is_sqlite:
-        # SQLite mode — NullPool gives each session its own connection.
-        # WAL mode (set via event listener in init_db) allows concurrent readers.
-        # All high-frequency writes go through the single-threaded write queue,
-        # so lock contention is eliminated at the application layer.
-        from sqlalchemy.pool import NullPool
         logger.info("Using SQLite backend: %s", settings.database_url)
+        if ":memory:" in settings.database_url or "mode=memory" in settings.database_url:
+            # Every connection to an in-memory database is a separate, empty
+            # database, so a pool would hand out unrelated databases.
+            from sqlalchemy.pool import NullPool
+            return create_async_engine(
+                settings.database_url,
+                echo=settings.debug,
+                connect_args={"check_same_thread": False},
+                poolclass=NullPool,
+            )
+        # SQLite file: keep connections open in a pool. Without one (NullPool)
+        # every session opened a new aiosqlite connection: a new thread, a new
+        # file handle and five PRAGMAs, on every request and every background
+        # query. That tripled the CPU cost of /api/v1/policy/evaluate (about
+        # 22 ms instead of 7 ms per call on one core) and pushed SDK calls
+        # past their 3 s timeout under modest traffic on a 1-CPU server.
+        # WAL mode (set via the connect listener in init_db) lets pooled
+        # readers run alongside the writer; busy_timeout covers write waits.
         return create_async_engine(
             settings.database_url,
             echo=settings.debug,
             connect_args={"check_same_thread": False},
-            poolclass=NullPool,
+            pool_size=settings.db_pool_size,
+            max_overflow=settings.db_max_overflow,
+            pool_timeout=settings.db_pool_timeout,
         )
 
     # PostgreSQL mode — full pool tuning

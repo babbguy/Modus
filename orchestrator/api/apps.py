@@ -22,6 +22,7 @@ import bcrypt
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from orchestrator.core.auth import Identity, get_identity, team_scope_clause
@@ -143,13 +144,6 @@ class AppUpdateRequest(BaseModel):
 
 # ── Registration ───────────────────────────────────────────────────────────────
 
-# In-memory set of app_ids currently queued for registration (not yet flushed).
-# Prevents duplicate registrations that arrive faster than the writer can flush.
-import threading as _threading
-_pending_registrations: set[str] = set()  # "team_id:app_id"
-_pending_lock = _threading.Lock()
-
-
 @router.post(
     "/apps/register",
     response_model=RegisterResponse,
@@ -167,8 +161,8 @@ async def register_app(
     Requires the master key in X-Modus-APIKey header.
     The returned api_key is shown once and not stored — save it immediately.
 
-    The DB write is queued and batched — the endpoint returns immediately
-    after validation and key generation.
+    The app row (and an auto-created team) is committed before the response
+    is sent, so the app is listed and its key works on the very next request.
     """
     raw_key = _extract_raw_key(request)
     if not _verify_master_key(raw_key):
@@ -214,43 +208,51 @@ async def register_app(
             ),
         )
 
-    # Check for pending (queued but not yet flushed) registration
-    pending_key = f"{team_id}:{body.app_id}"
-    with _pending_lock:
-        if pending_key in _pending_registrations:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    f"App '{body.app_id}' is already registered in team '{body.team_slug}'. "
-                    f"Use POST /api/v1/apps/{{id}}/rotate-key to issue a new key."
-                ),
-            )
-        _pending_registrations.add(pending_key)
-
-    # Generate key upfront — returned to caller immediately
+    # Generate key upfront — returned to caller once the row is committed
     import uuid as _uuid
     api_key = _generate_app_key()
     api_key_hash = await asyncio.to_thread(_hash_key, api_key)
     api_key_prefix = api_key[:16]
     app_uuid = str(_uuid.uuid4())
 
-    # Queue the DB write (batched by the background writer)
-    from orchestrator.core.write_queue import enqueue, RegistrationItem
-    await enqueue(RegistrationItem(
-        app_uuid=app_uuid,
+    # Write the app and its audit entry in this request's transaction and
+    # commit before responding. (Registration used to be queued for the
+    # background writer: the 201 arrived before the row existed, so the app
+    # was missing from GET /apps, and a write failure after the response,
+    # e.g. an app_id reused after a soft delete, silently voided the key.)
+    db.add(App(
+        id=app_uuid,
         team_id=team_id,
-        team_slug=body.team_slug,
         app_id=body.app_id,
         app_name=body.app_name,
         environment=body.environment,
         api_key_hash=api_key_hash,
         api_key_prefix=api_key_prefix,
-        actor_ip=request.client.host if request.client else None,
-        pending_key=pending_key,
     ))
+    db.add(AuditLog(
+        actor_id="master-key",
+        actor_ip=request.client.host if request.client else None,
+        team_id=team_id,
+        resource_type="app",
+        resource_id=app_uuid,
+        action="registered",
+        after={"app_id": body.app_id, "team": body.team_slug, "environment": body.environment},
+    ))
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"App '{body.app_id}' is already registered in team '{body.team_slug}' "
+                f"(or was deleted and its id is still reserved). "
+                f"Use POST /api/v1/apps/{{id}}/rotate-key to issue a new key."
+            ),
+        )
 
-    # Pre-populate ingest caches so workers can authenticate immediately,
-    # even before the write queue flushes the App row to the database.
+    # Warm the ingest key cache so the first SDK call skips the bcrypt check
+    # (the row itself is already committed).
     from orchestrator.api.ingest import pre_cache_registration
     pre_cache_registration(
         app_uuid=app_uuid,
@@ -265,7 +267,7 @@ async def register_app(
     REGISTRATIONS_TOTAL.labels(environment=body.environment).inc()
 
     logger.info(
-        "App registered (queued)",
+        "App registered",
         extra={
             "app_id": body.app_id,
             "team": body.team_slug,
