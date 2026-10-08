@@ -264,6 +264,37 @@ and issues.
 health, and a list of recent failures with the error reason. If alerts
 aren't reaching your Slack channel, this is where you'll see why.
 
+**Delivery results.** When an alert fires it is committed first; only then
+is it delivered. Each channel's outcome is stored on the alert as
+`{status: "delivered" | "dead_letter", success, error}` and as a durable
+`notification_deliveries` row (dead-lettered rows keep the payload for replay).
+`notification_sent` is true when at least one channel delivered. Delivery
+Health counts an alert as failed if any channel failed. Channels only receive
+alerts at or above their minimum severity (`warning` by default, so the 70%
+"caution" tier is recorded but not sent).
+
+### 3.8a Alerts and rules
+
+**Alerts & Rules** lists fired alerts and the rules (thresholds) that produce
+them. Use **+ New Rule** to create a rule: pick a team, a scope (team, app or
+provider), the metric (cost, input tokens, output tokens, calls), the period,
+an optional warning value and a required critical value. A rule fires at 70%
+(caution), 90% (warning, or your warning value) and 100% (critical) of the
+critical value, once per period and tier. The critical value must be above 0
+and the warning value below it. Use **Edit** to change the name, values or
+active state, and **Delete** to retire a rule. Per-user and per-cost-center
+scopes exist in the API but cannot be measured yet, so those rules are skipped
+with a log warning rather than firing team-wide.
+
+### 3.8b Connections
+
+**Connections** shows every outbound dependency (AI providers, Nomus,
+Federation, gateway upstreams and your notification channels) and **Test**
+checks one live. Endpoints are always shown masked; Test uses the real stored
+URL. A connection is **Connected**, **Degraded** (reachable but slow, at
+1500 ms or more, answering 5xx, or failing 2 of its last 4 checks) or
+**Error** (unreachable). The reason is shown on the card and as a tooltip.
+
 ### 3.9 Topology
 
 Live map of your apps, AI providers, frameworks, and service dependencies.
