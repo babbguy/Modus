@@ -127,7 +127,7 @@ jobs:
 
       - name: Comment plan on PR
         if: github.event_name == 'pull_request' && steps.plan.outputs.has-changes == 'true'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const fs = require('fs');
