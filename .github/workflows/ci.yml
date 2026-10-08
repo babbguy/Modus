@@ -11,7 +11,7 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -23,7 +23,7 @@ jobs:
     name: Dashboard JavaScript
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -39,7 +39,7 @@ jobs:
     name: Type Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -65,7 +65,7 @@ jobs:
     env:
       MODUS_DATABASE_URL: postgresql+asyncpg://modus:modus@localhost:5432/modus
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -88,7 +88,7 @@ jobs:
       MODUS_MASTER_API_KEY: mds_master_ci_test_key_placeholder_000
       MODUS_SECRET_KEY: test-secret-key-for-ci
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
