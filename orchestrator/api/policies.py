@@ -352,6 +352,8 @@ async def sync_policies(
             "policy_type": p.policy_type,
             "effect": p.effect,
             "priority": p.priority,
+            "scope": p.scope,
+            "conditions": p.conditions,
             "config": p.config,
             "action": p.action,
             "suggested_model": p.suggested_model,

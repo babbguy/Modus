@@ -79,6 +79,8 @@ class _RateLimiter:
         return now - (now % self._window)
 
     def check(self, key: str) -> bool:
+        if self._limit <= 0:
+            return True  # class limit disabled (configured as 0)
         import time as _time
         now = _time.monotonic()
         with self._lock:
@@ -122,6 +124,13 @@ class _RateLimiter:
             self._counters[key] = (entry_window, prev_count, curr_count)
             return True
 
+    def retry_after_seconds(self) -> int:
+        """Seconds until the current window rolls over (Retry-After hint)."""
+        import math
+        import time as _time
+        now = _time.monotonic()
+        return max(1, math.ceil(self._window - (now % self._window)))
+
     def _cleanup(self, now: float) -> None:
         """Remove keys with no recent hits. Called under lock."""
         cutoff = now - 2 * self._window
@@ -134,6 +143,52 @@ _rate_limiter = _RateLimiter(
     limit=settings.rate_limit_per_minute,
     burst=settings.rate_limit_burst,
 )
+# Machine traffic from registered apps (SDK / OTLP exporters). Separate class
+# so normal SDK volume (one evaluate per LLM call + flushes + heartbeats) is
+# never throttled by the dashboard-sized default limit.
+_sdk_rate_limiter = _RateLimiter(
+    limit=settings.rate_limit_sdk_per_minute,
+    burst=settings.rate_limit_sdk_burst,
+)
+
+# POST endpoints the SDK / exporters call with an app credential.
+_SDK_POST_PATHS = frozenset({
+    "/api/v1/ingest",
+    "/api/v1/heartbeat",
+    "/api/v1/policy/evaluate",
+    "/api/v1/routing/outcomes/batch",
+    "/api/v1/topology",
+    "/api/v1/governance/rewind-event",
+    "/api/v1/v1/traces",
+})
+# GET endpoints the SDK polls with an app credential (policy sync).
+_SDK_GET_PATHS = frozenset({"/api/v1/policies"})
+
+
+def _app_credential(request: Request) -> str | None:
+    """The app key/session token on a request, if it carries one."""
+    from orchestrator.core.session_token import SESSION_TOKEN_PREFIX
+    key = request.headers.get("x-modus-apikey")
+    if not key:
+        auth = request.headers.get("authorization", "")
+        if auth.startswith("Bearer "):
+            key = auth[7:].strip()
+    if key and key.startswith((settings.api_key_prefix, SESSION_TOKEN_PREFIX)):
+        return key
+    return None
+
+
+def _rate_limit_class(request: Request) -> tuple[str, "_RateLimiter", str]:
+    """Return (class name, limiter, bucket key) for an /api request."""
+    path = request.url.path.rstrip("/") or "/"
+    app_key = _app_credential(request)
+    if app_key and (
+        (request.method == "POST" and path in _SDK_POST_PATHS)
+        or (request.method == "GET" and path in _SDK_GET_PATHS)
+    ):
+        return "sdk", _sdk_rate_limiter, "sdk:" + app_key
+    key = request.headers.get("x-modus-apikey") or (request.client.host if request.client else "?")
+    return "default", _rate_limiter, key
 
 
 # ── Application factory ────────────────────────────────────────────────────────
@@ -213,9 +268,23 @@ def create_app() -> FastAPI:
     @app.middleware("http")
     async def metrics_middleware(request: Request, call_next) -> Response:
         if request.url.path.startswith("/api/") and request.client:
-            rate_key = request.headers.get("x-modus-apikey") or request.client.host
-            if not _rate_limiter.check(rate_key):
-                return JSONResponse({"detail": "Rate limit exceeded"}, status_code=429)
+            rate_class, limiter, rate_key = _rate_limit_class(request)
+            if not limiter.check(rate_key):
+                retry_after = limiter.retry_after_seconds()
+                logger.warning(
+                    "Rate limit exceeded (class=%s key=%s path=%s) — 429, Retry-After %ss",
+                    rate_class, rate_key[:12] + "…", request.url.path, retry_after,
+                )
+                HTTP_REQUESTS_TOTAL.labels(
+                    method=request.method,
+                    path=_normalise_path(request.url.path),
+                    status_code=429,
+                ).inc()
+                return JSONResponse(
+                    {"detail": "Rate limit exceeded", "rate_limit_class": rate_class},
+                    status_code=429,
+                    headers={"Retry-After": str(retry_after)},
+                )
         start = time.perf_counter()
         response = await call_next(request)
         duration = time.perf_counter() - start

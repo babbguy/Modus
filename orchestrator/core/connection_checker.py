@@ -16,6 +16,7 @@ Connection categories:
 from __future__ import annotations
 
 import asyncio
+import collections
 import logging
 import ssl
 import time
@@ -32,6 +33,15 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_TIMEOUT = 3  # seconds
 _CACHE_TTL = 60       # seconds
+
+# "degraded" = reachable but not healthy. A connection is degraded when ANY of:
+#   * the check succeeded but took >= _DEGRADED_LATENCY_MS (slow),
+#   * the endpoint answered with a 5xx (reachable, but failing server-side),
+#   * it succeeded now but >= _DEGRADED_MIN_FAILURES of its previous
+#     _HISTORY_LEN - 1 checks failed (elevated recent error rate / flapping).
+_DEGRADED_LATENCY_MS = 1500
+_DEGRADED_MIN_FAILURES = 2
+_HISTORY_LEN = 5
 
 # Known AI provider base URLs
 _AI_PROVIDER_URLS: dict[str, str] = {
@@ -59,14 +69,47 @@ def _cache_get(connection_id: str) -> Optional[dict]:
     return result
 
 
+# connection id -> outcomes of the most recent checks (True = reachable).
+_history: dict[str, "collections.deque[bool]"] = {}
+
+
+def _record_outcome(connection_id: str, ok: bool) -> list[bool]:
+    """Append an outcome; return the PREVIOUS outcomes (oldest first)."""
+    hist = _history.setdefault(connection_id, collections.deque(maxlen=_HISTORY_LEN))
+    previous = list(hist)
+    hist.append(ok)
+    return previous
+
+
+def _classify_ok(
+    latency_ms: float, status_code: int, previous: list[bool]
+) -> tuple[str, Optional[str]]:
+    """Return ("connected"|"degraded", reason) for a reachable endpoint."""
+    if status_code >= 500:
+        return "degraded", f"Endpoint reachable but returned HTTP {status_code}"
+    if latency_ms >= _DEGRADED_LATENCY_MS:
+        return "degraded", (
+            f"Slow response: {latency_ms:.0f} ms "
+            f"(degraded at >= {_DEGRADED_LATENCY_MS} ms)"
+        )
+    recent = previous[-(_HISTORY_LEN - 1):]
+    failures = sum(1 for o in recent if not o)
+    if failures >= _DEGRADED_MIN_FAILURES:
+        return "degraded", (
+            f"Elevated error rate: {failures} of the last {len(recent)} checks failed"
+        )
+    return "connected", None
+
+
 def _cache_set(connection_id: str, result: dict) -> None:
     """Store result in cache with current timestamp."""
     _cache[connection_id] = (result, time.monotonic())
 
 
 def clear_cache() -> None:
-    """Clear all cached connection results."""
+    """Clear all cached connection results (and check history)."""
     _cache.clear()
+    _history.clear()
 
 
 # ── URL / Key masking ───────────────────────────────────────────────────────
@@ -305,14 +348,14 @@ async def _gather_notifications() -> list[dict]:
     if slack.get("enabled") and slack.get("webhook_url"):
         connections.append(_make_connection(
             "notify_slack", "notification", "Slack Webhook", "slack",
-            endpoint=_mask_url(slack["webhook_url"]), status="configured",
+            endpoint=slack["webhook_url"], status="configured",
         ))
 
     teams = cfg.get("teams", {})
     if teams.get("enabled") and teams.get("webhook_url"):
         connections.append(_make_connection(
             "notify_teams", "notification", "Teams Webhook", "teams",
-            endpoint=_mask_url(teams["webhook_url"]), status="configured",
+            endpoint=teams["webhook_url"], status="configured",
         ))
 
     email = cfg.get("email", {})
@@ -336,7 +379,7 @@ async def _gather_notifications() -> list[dict]:
     if webhook.get("enabled") and webhook.get("url"):
         connections.append(_make_connection(
             "notify_custom", "notification", "Custom Webhook", "webhook",
-            endpoint=_mask_url(webhook["url"]), status="configured",
+            endpoint=webhook["url"], status="configured",
         ))
 
     return connections
@@ -505,6 +548,9 @@ async def gather_all_connections() -> list[dict]:
             conn["last_check"] = cached["last_check"]
             conn["last_success"] = cached["last_success"]
             conn["last_error"] = cached["last_error"]
+            for key in ("latency_ms", "status_code"):
+                if key in (cached.get("metadata") or {}):
+                    conn["metadata"][key] = cached["metadata"][key]
 
     return connections
 
@@ -526,11 +572,12 @@ async def _test_single_connection(conn: dict) -> dict:
 
     # SMTP connections need a different check
     if conn_type == "smtp":
+        started = time.monotonic()
         ok, error = await _test_smtp(raw_url, conn.get("metadata", {}).get("port", 587))
+        latency_ms = (time.monotonic() - started) * 1000
+        previous = _record_outcome(conn["id"], ok)
         if ok:
-            conn["status"] = "connected"
-            conn["last_success"] = now
-            conn["last_error"] = None
+            _apply_ok(conn, now, latency_ms, 0, previous)
         else:
             conn["status"] = "error"
             conn["last_error"] = error
@@ -539,21 +586,34 @@ async def _test_single_connection(conn: dict) -> dict:
 
     # HTTP-based check
     headers = conn.get("_raw_headers") or {}
+    started = time.monotonic()
     ok, status_code, error = await _async_check_url(
         raw_url, headers=headers, timeout=_DEFAULT_TIMEOUT
     )
+    latency_ms = (time.monotonic() - started) * 1000
+    previous = _record_outcome(conn["id"], ok)
 
     if ok:
-        conn["status"] = "connected"
-        conn["last_success"] = now
-        conn["last_error"] = None
-        conn["metadata"]["status_code"] = status_code
+        _apply_ok(conn, now, latency_ms, status_code, previous)
     else:
         conn["status"] = "error"
         conn["last_error"] = error or "Unreachable"
+        conn["metadata"]["latency_ms"] = round(latency_ms)
 
     _cache_set(conn["id"], conn)
     return conn
+
+
+def _apply_ok(conn: dict, now: str, latency_ms: float, status_code: int,
+              previous: list[bool]) -> None:
+    """Record a reachable result: connected, or degraded with the reason."""
+    state, reason = _classify_ok(latency_ms, status_code, previous)
+    conn["status"] = state
+    conn["last_success"] = now
+    conn["last_error"] = reason  # None when connected
+    conn["metadata"]["latency_ms"] = round(latency_ms)
+    if status_code:
+        conn["metadata"]["status_code"] = status_code
 
 
 async def _test_smtp(host: str, port: int = 587) -> tuple[bool, Optional[str]]:

@@ -249,6 +249,9 @@ async def get_status() -> dict:
         "sync_interval_seconds": interval,
         "sync_count": _sync_count,
         "policy_count": len(_cached_policies),
+        # A "regulation" is a jurisdiction's rule set (same grouping as
+        # GET /admin/nomus/regulations), so the count is distinct jurisdictions.
+        "regulation_count": len(jurisdictions),
         "jurisdictions": sorted(jurisdictions),
         "categories": sorted(categories),
         "severity_counts": severity_counts,

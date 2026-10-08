@@ -258,8 +258,8 @@ function _renderConnCard(conn) {
     </div>
   </div>
   <div class="conn-card-status">
-    <span class="conn-badge ${statusClass}">${statusLabel}</span>
-    <span class="conn-card-meta">${lastCheck === 'never' ? 'never checked' : lastCheck}</span>
+    <span class="conn-badge ${statusClass}" title="${esc(conn.last_error || '')}">${statusLabel}</span>
+    <span class="conn-card-meta">${lastCheck === 'never' ? 'never checked' : lastCheck}${conn.metadata && conn.metadata.latency_ms != null ? ' \u00b7 ' + esc(String(conn.metadata.latency_ms)) + ' ms' : ''}</span>
   </div>
   <button class="ds-btn ds-btn-ghost ds-btn-sm conn-test-btn" data-id="${esc(conn.id)}">Test</button>
 </div>`;
@@ -305,6 +305,9 @@ function _statusLabel(status) {
 }
 
 function _maskEndpoint(url) {
+  // The API already masks endpoints (scheme://first-8-chars***). Re-parsing a
+  // masked value with URL() percent-encodes the asterisks, so show it as sent.
+  if (url.includes('***')) return url;
   try {
     const u = new URL(url);
     const host = u.hostname;
@@ -323,6 +326,18 @@ function _maskEndpoint(url) {
   }
 }
 
+/** Keep the KPI row in step with single-card Test results without a reload. */
+function _refreshSummaryFromBadges() {
+  const counts = { total: 0, connected: 0, degraded: 0, error: 0, disabled: 0, not_configured: 0 };
+  document.querySelectorAll('.conn-card .conn-badge').forEach(b => {
+    counts.total++;
+    for (const k of ['connected', 'degraded', 'error', 'disabled', 'not_configured']) {
+      if (b.classList.contains(k)) counts[k]++;
+    }
+  });
+  _renderSummary(counts);
+}
+
 // ── Connection testing ───────────────────────────────────────────────────────
 
 async function _testConnection(connId, btn) {
@@ -339,35 +354,34 @@ async function _testConnection(connId, btn) {
 
     if (_destroyed) return;
 
-    const result = await resp.json();
+    const result = await resp.json().catch(() => ({}));
     const card = btn.closest('.conn-card');
     if (!card) return;
 
     const badge = card.querySelector('.conn-badge');
     const meta = card.querySelector('.conn-card-meta');
+    // Non-2xx responses carry {detail}; a 2xx carries the connection record.
+    const status = resp.ok ? (result.status || 'error') : 'error';
+    const reason = resp.ok ? (result.last_error || '') : (typeof result.detail === 'string' ? result.detail : `HTTP ${resp.status}`);
+    const latency = resp.ok && result.metadata && result.metadata.latency_ms != null
+      ? ` \u00b7 ${result.metadata.latency_ms} ms` : '';
 
-    if (resp.ok && result.status === 'connected') {
-      // Success flash
-      if (badge) {
-        badge.className = 'conn-badge connected';
-        badge.textContent = 'Connected';
-      }
-      if (meta) meta.textContent = 'just now';
-      card.style.transition = 'background 0.3s ease';
-      card.style.background = 'rgba(16,185,129,0.08)';
-      setTimeout(() => { card.style.background = ''; }, 1500);
-    } else {
-      // Error flash
-      const status = result.status || 'error';
-      if (badge) {
-        badge.className = `conn-badge ${status}`;
-        badge.textContent = _statusLabel(status);
-      }
-      if (meta) meta.textContent = result.error || 'test failed';
-      card.style.transition = 'background 0.3s ease';
-      card.style.background = 'rgba(239,68,68,0.08)';
-      setTimeout(() => { card.style.background = ''; }, 1500);
+    if (badge) {
+      badge.className = `conn-badge ${status}`;
+      badge.textContent = _statusLabel(status);
+      badge.title = reason;
     }
+    if (meta) {
+      meta.textContent = status === 'connected' ? `just now${latency}`
+        : status === 'degraded' ? `${reason || 'degraded'}`
+        : (reason || 'test failed');
+    }
+    const flash = status === 'connected' ? 'rgba(16,185,129,0.08)'
+      : status === 'degraded' ? 'rgba(245,158,11,0.10)' : 'rgba(239,68,68,0.08)';
+    card.style.transition = 'background 0.3s ease';
+    card.style.background = flash;
+    setTimeout(() => { card.style.background = ''; }, 1500);
+    _refreshSummaryFromBadges();
   } catch (err) {
     if (_destroyed) return;
     const card = btn.closest('.conn-card');

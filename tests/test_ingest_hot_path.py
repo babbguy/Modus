@@ -213,8 +213,8 @@ async def test_ingest_aggregated_valid_returns_202(hp_client):
     # Aggregated: accepted = sum of call_count across aggregates
     assert body["accepted"] == 50
     assert body["rejected"] == 0
-    # Two enqueue calls: one for aggregates, one for traces
-    assert mock_enqueue.call_count == 2
+    # One write-queue item: aggregates + traces under one batch-id claim
+    assert mock_enqueue.call_count == 1
 
 
 async def test_ingest_single_record(hp_client):
@@ -448,27 +448,27 @@ async def test_ingest_enqueues_correct_item_shape(hp_client, seeded_app):
     assert item.total_output_tokens == 200
 
 
-async def test_ingest_aggregated_enqueues_both_items(hp_client):
-    """Aggregated ingest enqueues AggregationItem + IngestItem for traces."""
-    with patch("orchestrator.core.write_queue.queue_over_pressure", return_value=False), \
-         patch("orchestrator.core.write_queue.enqueue", new_callable=AsyncMock) as mock_enqueue:
+async def test_ingest_aggregated_enqueues_one_idempotent_item(hp_client):
+    """Aggregated ingest enqueues ONE IngestItem under the payload's batch id:
+    the aggregates as counted usage increments, the traces as detail records
+    that are not counted again."""
+    with patch("orchestrator.core.write_queue.queue_over_pressure", return_value=False),          patch("orchestrator.core.write_queue.enqueue", new_callable=AsyncMock) as mock_enqueue:
+        payload = _aggregated_payload()
         resp = await hp_client.post(
             "/api/v1/ingest",
-            json=_aggregated_payload(),
+            json=payload,
             headers=_headers(),
         )
 
     assert resp.status_code == 202
-    assert mock_enqueue.call_count == 2
+    assert mock_enqueue.call_count == 1
 
-    # First call: AggregationItem (aggregates)
-    from orchestrator.core.write_queue import AggregationItem, IngestItem
-    agg_item = mock_enqueue.call_args_list[0][0][0]
-    trace_item = mock_enqueue.call_args_list[1][0][0]
-
-    assert isinstance(agg_item, AggregationItem)
-    assert agg_item.granularity == "hourly"
-    assert len(agg_item.rows) == 1
-
-    assert isinstance(trace_item, IngestItem)
-    assert len(trace_item.records) == 1
+    from orchestrator.core.write_queue import IngestItem
+    item = mock_enqueue.call_args_list[0][0][0]
+    assert isinstance(item, IngestItem)
+    assert item.batch_id == payload["batch_id"]
+    assert item.count_records is False
+    assert len(item.usage) == 1
+    assert item.usage[0]["call_count"] == 50
+    assert item.usage[0]["total_cost"] == Decimal("1.25")
+    assert len(item.records) == 1  # the trace, stored for detail only

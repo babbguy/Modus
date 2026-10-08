@@ -268,8 +268,11 @@ class TestAggregation:
             metadata={"_policy_violation": True},
         )
         agent._aggregate_record(rec)
+        # Kept at full detail as a trace AND counted in its bucket, so the
+        # orchestrator never has to count traces.
         assert len(agent._agg_sampled) == 1
-        assert len(agent._agg_buckets) == 0
+        assert len(agent._agg_buckets) == 1
+        assert next(iter(agent._agg_buckets.values())).call_count == 1
 
     def test_aggregate_record_normal_into_bucket(self):
         agent = _make_agent(aggregation_enabled=True)
@@ -284,7 +287,7 @@ class TestAggregation:
         )
         agent._aggregate_record(rec)
         assert len(agent._agg_buckets) == 1
-        key = "openai:gpt-4:chat:llm_call"
+        key = f"{rec.timestamp[:13]}|openai:gpt-4:chat:llm_call"
         assert agent._agg_buckets[key].call_count == 1
 
     def test_aggregate_record_error_always_sampled(self):
@@ -343,7 +346,10 @@ class TestFlush:
         ))
         with patch("modus.agent._urlopen_tls", side_effect=ConnectionError):
             agent._flush_raw()
-        assert len(agent._records) == 1  # re-queued
+        # Kept as a frozen pending batch (same batch_id on retry), not
+        # re-buffered under a new batch_id.
+        assert len(agent._records) == 0
+        assert len(agent._pending_batches) == 1
 
     def test_flush_aggregated_sends_buckets(self):
         agent = _make_agent(aggregation_enabled=True)
@@ -384,8 +390,11 @@ class TestFlush:
 
         with patch("modus.agent._urlopen_tls", side_effect=ConnectionError):
             agent._flush_aggregated()
-        # Should re-queue
-        assert "openai:gpt-4:chat:llm_call" in agent._agg_buckets
+        # Kept as a frozen pending batch for an idempotent retry
+        assert agent._agg_buckets == {}
+        assert len(agent._pending_batches) == 1
+        body = json.loads(agent._pending_batches[0].body)
+        assert body["aggregates"][0]["call_count"] == 3
 
     def test_flush_no_api_key(self):
         agent = _make_agent()

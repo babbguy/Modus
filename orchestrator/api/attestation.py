@@ -22,7 +22,7 @@ from sqlalchemy import func, select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from orchestrator.core.attestation_engine import AttestationSigner, resolve_attestation_key
-from orchestrator.core.auth import Identity, get_identity
+from orchestrator.core.auth import Identity, get_identity, team_scope_clause
 from orchestrator.core.merkle import MerkleTree
 from orchestrator.db.models import (
     EnforcementAttestation,
@@ -81,6 +81,7 @@ class AttestationStatsResponse(BaseModel):
     total: int = 0
     verified: int = 0
     pending: int = 0
+    merkle_roots: int = 0  # batch roots published so far (roots are not team-scoped)
 
 
 # ── Verify single attestation ───────────────────────────────────────────────
@@ -172,7 +173,7 @@ async def list_attestations(
         q = q.join(
             PolicyDecision,
             PolicyDecision.id == EnforcementAttestation.decision_id,
-        ).where(PolicyDecision.team_id == identity.team_id)
+        ).where(team_scope_clause(PolicyDecision.team_id, identity.visible_team_ids()))
 
     q = q.limit(limit)
     result = await db.execute(q)
@@ -216,16 +217,13 @@ async def attestation_stats(
     """Total / verified / pending attestation counts for a team."""
     base = select(func.count().label("cnt"))
 
-    # Determine effective team filter
-    effective_team = team_id
-    if not effective_team and not identity.is_platform_admin:
-        effective_team = identity.team_id
-
-    if effective_team:
+    # None = every team (platform admin); otherwise the caller's teams.
+    teams = identity.visible_team_ids(team_id)
+    if teams is not None:
         base = base.select_from(EnforcementAttestation).join(
             PolicyDecision,
             PolicyDecision.id == EnforcementAttestation.decision_id,
-        ).where(PolicyDecision.team_id == effective_team)
+        ).where(team_scope_clause(PolicyDecision.team_id, teams))
     else:
         base = base.select_from(EnforcementAttestation)
 
@@ -240,8 +238,11 @@ async def attestation_stats(
 
     pending = total - verified
 
+    roots = (await db.execute(select(func.count(MerkleRootModel.id)))).scalar() or 0
+
     return AttestationStatsResponse(
         total=total,
         verified=verified,
         pending=pending,
+        merkle_roots=roots,
     )

@@ -6,12 +6,13 @@
 
 import { initGrid, addTiles, loadLayout } from '../grid.js';
 import { createTile, setTileLoading, setTileEmpty, setTileError } from '../tile.js';
-import { apiFetch, rawFetch, esc } from '../api.js';
+import { apiFetch, rawFetch, esc, loadAppNames, appName } from '../api.js';
 import { fmtCost, fmtNum, timeSince } from '../format.js';
 import { get } from '../state.js';
 import { openModal, closeModal } from '../modal.js';
 import { LAYOUTS } from '../layouts/defaults.js';
 import { toast, confirm as uiConfirm } from '../toast.js';
+import { formatApiError } from '../policy-form.js';
 
 // ── Module state ─────────────────────────────────────────────────────────────
 
@@ -99,7 +100,7 @@ function _createThresholdsTile() {
     actions: [
       {
         label: '+ New Rule',
-        onclick: () => _openThresholdModal(),
+        onclick: () => _openThresholdModal(null),
       },
     ],
   });
@@ -108,6 +109,7 @@ function _createThresholdsTile() {
 // ── Data fetching ────────────────────────────────────────────────────────────
 
 async function _loadData() {
+  await loadAppNames();
   if (_destroyed) return;
   setTileLoading('alerts-stats', 'cards');
   setTileLoading('alerts-table', 'table');
@@ -204,7 +206,7 @@ function _renderAlerts(items) {
               <td><span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:${sevColor}"></span></td>
               <td style="font-weight:500;color:var(--text)">${esc(a.metric || '\u2014')}</td>
               <td><span style="color:${sevColor};font-size:11px;text-transform:uppercase;font-weight:600">${esc(a.severity || 'info')}</span></td>
-              <td style="font-size:11px;color:var(--muted)">${esc(a.app_id || 'All')}</td>
+              <td style="font-size:11px;color:var(--muted)">${esc(appName(a.app_id) || 'All')}</td>
               <td style="font-family:var(--mono);font-size:11px">${fmtCost(a.actual_value)}</td>
               <td style="font-family:var(--mono);font-size:11px">${fmtCost(a.threshold_value)}</td>
               <td style="font-size:11px;color:var(--muted)">${a.fired_at ? timeSince(a.fired_at) : '\u2014'}</td>
@@ -281,6 +283,7 @@ function _renderThresholds(items) {
               <td style="color:var(--danger)">${t.critical_value != null ? t.critical_value : '\u2014'}</td>
               <td>${status}</td>
               <td>
+                <button class="ds-btn ds-btn-ghost ds-btn-sm thr-edit-btn" data-idx="${idx}" style="font-size:11px">Edit</button>
                 <button class="ds-btn ds-btn-ghost ds-btn-sm thr-delete-btn" data-idx="${idx}" style="font-size:11px;color:var(--danger)">Delete</button>
               </td>
             </tr>`;
@@ -296,6 +299,15 @@ function _renderThresholds(items) {
       const col = th.dataset.col;
       if (_thrSortCol === col) { _thrSortDir *= -1; } else { _thrSortCol = col; _thrSortDir = 1; }
       _renderThresholds(_thresholdsCache);
+    });
+  });
+
+  // Edit
+  body.querySelectorAll('.thr-edit-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const t = sorted[parseInt(btn.dataset.idx, 10)];
+      if (t) _openThresholdModal(t);
     });
   });
 
@@ -346,7 +358,7 @@ function _showAlertModal(alert) {
             <span style="color:var(--muted)">Threshold</span>
             <span style="font-family:var(--mono);color:var(--text)">${fmtCost(alert.threshold_value)}</span>
             <span style="color:var(--muted)">App</span>
-            <span style="color:var(--text)">${esc(alert.app_id || 'All apps')}</span>
+            <span style="color:var(--text)">${esc(appName(alert.app_id) || 'All apps')}</span>
             <span style="color:var(--muted)">Fired At</span>
             <span style="font-family:var(--mono);font-size:11px;color:var(--text)">${firedAt}</span>
             <span style="color:var(--muted)">Acknowledged</span>
@@ -358,111 +370,236 @@ function _showAlertModal(alert) {
   });
 }
 
-// ── Create Threshold Modal ───────────────────────────────────────────────────
+// ── Create / Edit Threshold Modal ────────────────────────────────────────────
+// The form posts exactly what POST /api/v1/thresholds validates: team_id (a
+// real team), scope in app|team|provider, metric in total_cost|input_tokens|
+// output_tokens|call_count, period, critical_value > 0, warning_value <
+// critical_value, plus app_id / provider when the scope needs them.
 
-function _openThresholdModal() {
+const _lbl = 'font-size:12px;font-weight:600;color:var(--text);display:block;margin-bottom:4px';
+
+async function _fetchList(path) {
+  try {
+    const resp = await rawFetch(path);
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    return Array.isArray(data) ? data : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function _opt(value, label, selected) {
+  return `<option value="${esc(value)}" ${selected ? 'selected' : ''}>${esc(label)}</option>`;
+}
+
+function _openThresholdModal(existing = null) {
+  const isEdit = !!existing;
   let _modalId = null;
+  const lock = isEdit ? 'disabled' : '';
   _modalId = openModal({
-    title: 'New Alert Rule',
+    title: isEdit ? 'Edit Alert Rule' : 'New Alert Rule',
     maxWidth: '520px',
     renderBody: (body) => {
       body.innerHTML = `
         <div style="display:flex;flex-direction:column;gap:14px;padding:4px 0">
           <div>
-            <label style="font-size:12px;font-weight:600;color:var(--text);display:block;margin-bottom:4px">Name</label>
-            <input class="ds-input" id="thr-name" placeholder="Daily cost limit" style="width:100%">
+            <label style="${_lbl}">Name</label>
+            <input class="ds-input" id="thr-name" placeholder="Daily cost limit" value="${esc(existing?.name || '')}" style="width:100%">
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
             <div>
-              <label style="font-size:12px;font-weight:600;color:var(--text);display:block;margin-bottom:4px">Scope</label>
-              <select class="ds-select" id="thr-scope" style="width:100%">
-                <option value="global">Global</option>
-                <option value="team">Team</option>
-                <option value="app">App</option>
-                <option value="provider">Provider</option>
+              <label style="${_lbl}">Scope</label>
+              <select class="ds-select" id="thr-scope" ${lock} style="width:100%">
+                <option value="team" ${existing?.scope === 'team' ? 'selected' : ''}>Team</option>
+                <option value="app" ${!existing || existing.scope === 'app' ? 'selected' : ''}>App</option>
+                <option value="provider" ${existing?.scope === 'provider' ? 'selected' : ''}>Provider</option>
               </select>
             </div>
             <div>
-              <label style="font-size:12px;font-weight:600;color:var(--text);display:block;margin-bottom:4px">Metric</label>
-              <select class="ds-select" id="thr-metric" style="width:100%">
-                <option value="cost">Cost (USD)</option>
-                <option value="tokens">Tokens</option>
-                <option value="calls">API Calls</option>
-                <option value="latency_p99">Latency P99</option>
-                <option value="error_rate">Error Rate</option>
+              <label style="${_lbl}">Metric</label>
+              <select class="ds-select" id="thr-metric" ${lock} style="width:100%">
+                <option value="total_cost">Cost (USD)</option>
+                <option value="input_tokens">Input tokens</option>
+                <option value="output_tokens">Output tokens</option>
+                <option value="call_count">API calls</option>
               </select>
             </div>
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
             <div>
-              <label style="font-size:12px;font-weight:600;color:var(--text);display:block;margin-bottom:4px">Period</label>
-              <select class="ds-select" id="thr-period" style="width:100%">
+              <label style="${_lbl}">Team</label>
+              <select class="ds-select" id="thr-team" ${lock} style="width:100%"><option value="">Loading teams…</option></select>
+            </div>
+            <div id="thr-app-wrap">
+              <label style="${_lbl}">App</label>
+              <select class="ds-select" id="thr-app" ${lock} style="width:100%"><option value="">Loading apps…</option></select>
+            </div>
+            <div id="thr-provider-wrap" style="display:none">
+              <label style="${_lbl}">Provider</label>
+              <input class="ds-input" id="thr-provider" ${lock} placeholder="openai" value="${esc(existing?.provider || '')}" style="width:100%">
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+            <div>
+              <label style="${_lbl}">Period</label>
+              <select class="ds-select" id="thr-period" ${lock} style="width:100%">
                 <option value="hourly">Hourly</option>
-                <option value="daily" selected>Daily</option>
+                <option value="daily">Daily</option>
                 <option value="weekly">Weekly</option>
                 <option value="monthly">Monthly</option>
               </select>
             </div>
-            <div>
-              <label style="font-size:12px;font-weight:600;color:var(--text);display:block;margin-bottom:4px">Provider (optional)</label>
-              <input class="ds-input" id="thr-provider" placeholder="openai" style="width:100%">
-            </div>
+            ${isEdit ? `<div>
+              <label style="${_lbl}">Active</label>
+              <label style="display:flex;align-items:center;gap:6px;padding-top:4px;cursor:pointer">
+                <input type="checkbox" id="thr-active" ${existing.is_active !== false ? 'checked' : ''}>
+                <span style="font-size:12px;color:var(--muted)">Enabled</span>
+              </label>
+            </div>` : '<div></div>'}
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
             <div>
-              <label style="font-size:12px;font-weight:600;color:var(--text);display:block;margin-bottom:4px">Warning Value</label>
-              <input class="ds-input" id="thr-warning" type="number" step="0.01" placeholder="Optional" style="width:100%">
+              <label style="${_lbl}">Warning value (90% tier override)</label>
+              <input class="ds-input" id="thr-warning" type="number" min="0" step="any" placeholder="Optional" value="${existing?.warning_value ?? ''}" style="width:100%">
             </div>
             <div>
-              <label style="font-size:12px;font-weight:600;color:var(--text);display:block;margin-bottom:4px">Critical Value</label>
-              <input class="ds-input" id="thr-critical" type="number" step="0.01" placeholder="Required" style="width:100%">
+              <label style="${_lbl}">Critical value *</label>
+              <input class="ds-input" id="thr-critical" type="number" min="0" step="any" placeholder="Required" value="${existing?.critical_value ?? ''}" style="width:100%">
             </div>
           </div>
           <div id="thr-result" style="display:none"></div>
-          <button class="ds-btn ds-btn-primary" id="thr-save-btn" style="margin-top:4px">Create Rule</button>
+          <button class="ds-btn ds-btn-primary" id="thr-save-btn" style="margin-top:4px">${isEdit ? 'Save Changes' : 'Create Rule'}</button>
         </div>
       `;
-      body.querySelector('#thr-save-btn').addEventListener('click', () => _saveThreshold(_modalId));
+      if (existing) {
+        body.querySelector('#thr-metric').value = existing.metric;
+        body.querySelector('#thr-period').value = existing.period;
+      } else {
+        body.querySelector('#thr-period').value = 'daily';
+      }
+
+      const scopeSel = body.querySelector('#thr-scope');
+      const teamSel = body.querySelector('#thr-team');
+      const appSel = body.querySelector('#thr-app');
+      let apps = [];
+      const syncScope = () => {
+        const s = scopeSel.value;
+        body.querySelector('#thr-app-wrap').style.display = s === 'app' ? '' : 'none';
+        body.querySelector('#thr-provider-wrap').style.display = s === 'provider' ? '' : 'none';
+        const teamId = teamSel.value;
+        const choices = apps.filter(a => !teamId || a.team_id === teamId);
+        appSel.innerHTML = '<option value="">Select an app…</option>' +
+          choices.map(a => _opt(a.id, `${a.app_name || a.app_id} (${a.app_id})`, existing?.app_id === a.id)).join('');
+      };
+      scopeSel.addEventListener('change', syncScope);
+      teamSel.addEventListener('change', syncScope);
+      syncScope();
+
+      (async () => {
+        const [teams, appList] = await Promise.all([
+          _fetchList('/api/v1/teams?limit=500'),
+          _fetchList('/api/v1/apps?limit=500'),
+        ]);
+        if (_destroyed) return;
+        apps = appList || [];
+        if (teams === null) {
+          teamSel.innerHTML = '<option value="">Could not load teams</option>';
+        } else {
+          teamSel.innerHTML = '<option value="">Select a team…</option>' +
+            teams.map(t => _opt(t.id, `${t.name} (${t.slug})`, existing?.team_id === t.id)).join('');
+        }
+        syncScope();
+      })();
+
+      body.querySelector('#thr-save-btn').addEventListener('click', () => _saveThreshold(existing, _modalId));
     },
   });
 }
 
-async function _saveThreshold(modalId) {
+function _showThrError(msg) {
+  const result = document.getElementById('thr-result');
+  if (!result) return;
+  result.style.display = 'block';
+  result.innerHTML = `<div style="color:var(--danger);font-size:12px">${esc(msg)}</div>`;
+}
+
+/**
+ * Validate the form and build the request body. Returns {payload, error}.
+ * Mirrors the server rules so the user gets a precise message before the call.
+ */
+function _buildThresholdPayload(existing) {
+  const val = (id) => (document.getElementById(id)?.value ?? '').trim();
+  const name = val('thr-name');
+  if (!name) return { error: 'Name is required.' };
+  const critical = val('thr-critical');
+  const warning = val('thr-warning');
+  if (critical === '' || !(parseFloat(critical) > 0)) return { error: 'Critical value must be a number greater than 0.' };
+  if (warning !== '' && (!(parseFloat(warning) >= 0) || parseFloat(warning) >= parseFloat(critical))) {
+    return { error: 'Warning value must be lower than the critical value.' };
+  }
+  // Decimals go over the wire as strings so no precision is lost.
+  if (existing) {
+    return {
+      payload: {
+        name,
+        warning_value: warning === '' ? null : warning,
+        critical_value: critical,
+        is_active: document.getElementById('thr-active')?.checked !== false,
+      },
+    };
+  }
+  const scope = val('thr-scope');
+  const teamId = val('thr-team');
+  if (!teamId) return { error: 'Select a team.' };
+  const payload = {
+    name,
+    team_id: teamId,
+    scope,
+    metric: val('thr-metric'),
+    period: val('thr-period'),
+    critical_value: critical,
+  };
+  if (warning !== '') payload.warning_value = warning;
+  if (scope === 'app') {
+    const appId = val('thr-app');
+    if (!appId) return { error: 'Select an app for an app-scoped rule.' };
+    payload.app_id = appId;
+  }
+  if (scope === 'provider') {
+    const provider = val('thr-provider');
+    if (!provider) return { error: 'Enter a provider for a provider-scoped rule.' };
+    payload.provider = provider;
+  }
+  return { payload };
+}
+
+async function _saveThreshold(existing, modalId) {
   const btn = document.getElementById('thr-save-btn');
   if (!btn) return;
+  const idle = existing ? 'Save Changes' : 'Create Rule';
+
+  const { payload, error } = _buildThresholdPayload(existing);
+  if (error) { _showThrError(error); return; }
+
   btn.disabled = true;
-  btn.textContent = 'Creating\u2026';
-
-  const payload = {
-    name: (document.getElementById('thr-name')?.value || '').trim(),
-    scope: document.getElementById('thr-scope')?.value || 'global',
-    provider: (document.getElementById('thr-provider')?.value || '').trim() || null,
-    metric: document.getElementById('thr-metric')?.value || 'cost',
-    period: document.getElementById('thr-period')?.value || 'daily',
-    warning_value: document.getElementById('thr-warning')?.value ? parseFloat(document.getElementById('thr-warning').value) : null,
-    critical_value: parseFloat(document.getElementById('thr-critical')?.value || '0'),
-  };
-
+  btn.textContent = 'Saving…';
   try {
-    const resp = await rawFetch('/api/v1/thresholds', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+    const resp = await rawFetch(existing ? `/api/v1/thresholds/${encodeURIComponent(existing.id)}` : '/api/v1/thresholds', {
+      method: existing ? 'PATCH' : 'POST',
       body: JSON.stringify(payload),
     });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}));
-      throw new Error(err.detail?.message || err.detail || resp.statusText);
+      throw new Error(formatApiError(err, resp.status));
     }
     closeModal(modalId);
+    toast(existing ? 'Alert rule updated' : 'Alert rule created', 'success');
     _loadData();
   } catch (e) {
-    const result = document.getElementById('thr-result');
-    if (result) {
-      result.style.display = 'block';
-      result.innerHTML = `<div style="color:var(--danger);font-size:12px">${esc(e.message)}</div>`;
-    }
+    _showThrError(e.message);
     btn.disabled = false;
-    btn.textContent = 'Create Rule';
+    btn.textContent = idle;
   }
 }
 
@@ -474,7 +611,10 @@ async function _deleteThreshold(threshold) {
   if (!ok) return;
   try {
     const resp = await rawFetch(`/api/v1/thresholds/${threshold.id}`, { method: 'DELETE' });
-    if (!resp.ok && resp.status !== 204) throw new Error(resp.statusText);
+    if (!resp.ok && resp.status !== 204) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(formatApiError(err, resp.status));
+    }
     toast('Alert rule deleted', 'success');
     _loadData();
   } catch (e) {

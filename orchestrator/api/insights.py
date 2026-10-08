@@ -26,7 +26,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from orchestrator.core.auth import Identity, get_identity
+from orchestrator.core.auth import Identity, get_identity, team_scope_clause
 from orchestrator.core.insights_engine import (
     run_anomaly_scan, run_forecast_update,
     run_recommendation_refresh, _DEFAULTS,
@@ -93,6 +93,18 @@ class EnforcementSummary(BaseModel):
     period: str
 
 
+class OpsKpis(BaseModel):
+    """Live operational KPIs for the DevOps view (UTC day so far)."""
+    window_start: datetime          # start of the UTC day these figures cover
+    cost_this_hour: float           # spend in the current hourly bucket
+    blocked_today: int              # policy decisions with decision == 'deny'
+    throttled_today: int
+    calls_today: int
+    tokens_per_call: Optional[float]
+    avg_latency_ms: Optional[float]  # call-weighted mean; percentiles are not collected
+    latency_samples: int            # calls that reported a duration
+
+
 class ForecastResponse(BaseModel):
     team_id: Optional[str]
     period_label: str
@@ -112,7 +124,10 @@ class RoiResponse(BaseModel):
     estimated_savings: float
     top_policy: Optional[str]
     top_policy_blocks: Optional[int]
-    platform_cost_usd: float  # Modus's own AI API costs (MTD)
+    platform_cost_usd: float  # Modus's own AI API costs (MTD); 0 until Modus meters its own usage
+    net_savings: float        # estimated_savings - platform_cost_usd
+    cost_per_blocked: Optional[float] = None  # estimated_savings / blocked_calls
+    roi_multiple: Optional[float] = None      # estimated_savings / platform_cost_usd (None when no platform cost)
 
 
 class SettingResponse(BaseModel):
@@ -133,10 +148,26 @@ class SettingUpdate(BaseModel):
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
-async def _app_name_map(db: AsyncSession, team_id: str) -> dict[str, str]:
-    """Return {app_id: app_name} for all apps in a team."""
+def _visible_teams(identity: Identity, requested: Optional[str] = None) -> Optional[list[str]]:
+    """Team ids an insights query may read (``None`` = every team); see Identity.visible_team_ids."""
+    return identity.visible_team_ids(requested)
+
+
+def _team_sql(teams: Optional[list[str]], column: str = "team_id") -> tuple[str, dict]:
+    """Raw-SQL equivalent of :func:`_team_clause`: ``(sql_fragment, bind_params)``."""
+    if teams is None:
+        return "1=1", {}
+    if not teams:
+        return "1=0", {}
+    params = {f"_t{i}": t for i, t in enumerate(teams)}
+    names = ", ".join(f":{k}" for k in params)
+    return f"CAST({column} AS TEXT) IN ({names})", params
+
+
+async def _app_name_map(db: AsyncSession, teams: Optional[list[str]]) -> dict[str, str]:
+    """Return {app_id: app_name} for all apps in the given teams (None = all)."""
     rows = await db.execute(
-        select(App.id, App.app_name).where(App.team_id == team_id)
+        select(App.id, App.app_name).where(team_scope_clause(App.team_id, teams))
     )
     return {str(r.id): r.app_name for r in rows.all()}
 
@@ -163,14 +194,16 @@ async def get_anomalies(
     include_resolved: bool = Query(False),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
+    team_id: Optional[str] = Query(None, description="Restrict to one team (platform admins: all teams when omitted)"),
     identity: Identity = Depends(get_identity),
     db: AsyncSession = Depends(get_session, scope="function"),
 ):
-    """Recent anomaly events for the requesting team."""
+    """Recent anomaly events for every team the caller can see."""
     since = datetime.now(timezone.utc) - timedelta(hours=hours)
+    teams = _visible_teams(identity, team_id)
 
     q = select(AnomalyEvent).where(
-        AnomalyEvent.team_id == identity.team_id,
+        team_scope_clause(AnomalyEvent.team_id, teams),
         AnomalyEvent.detected_at >= since,
     )
     if severity:
@@ -181,7 +214,7 @@ async def get_anomalies(
     q = q.order_by(AnomalyEvent.detected_at.desc()).limit(limit).offset(offset)
     rows = (await db.execute(q)).scalars().all()
 
-    app_names = await _app_name_map(db, identity.team_id)
+    app_names = await _app_name_map(db, teams)
 
     return [
         AnomalyResponse(
@@ -212,12 +245,14 @@ async def get_recommendations(
                                description="Minimum monthly savings to include"),
     limit: int = Query(20, ge=1, le=500),
     offset: int = Query(0, ge=0),
+    team_id: Optional[str] = Query(None, description="Restrict to one team (platform admins: all teams when omitted)"),
     identity: Identity = Depends(get_identity),
     db: AsyncSession = Depends(get_session, scope="function"),
 ):
-    """Model optimization recommendations for the requesting team."""
+    """Model optimization recommendations for every team the caller can see."""
+    teams = _visible_teams(identity, team_id)
     q = select(OptimizationRecommendation).where(
-        OptimizationRecommendation.team_id == identity.team_id,
+        team_scope_clause(OptimizationRecommendation.team_id, teams),
         OptimizationRecommendation.applied_at.is_(None),
         OptimizationRecommendation.estimated_monthly_savings >= Decimal(str(min_savings)),
     )
@@ -229,7 +264,7 @@ async def get_recommendations(
     ).limit(limit).offset(offset)
 
     rows = (await db.execute(q)).scalars().all()
-    app_names = await _app_name_map(db, identity.team_id)
+    app_names = await _app_name_map(db, teams)
 
     return [
         RecommendationResponse(
@@ -259,7 +294,7 @@ async def dismiss_recommendation(
     db: AsyncSession = Depends(get_session, scope="function"),
 ):
     rec = await db.get(OptimizationRecommendation, rec_id)
-    if not rec or rec.team_id != identity.team_id:
+    if not rec or not identity.can_access_team(rec.team_id):
         raise HTTPException(status_code=404, detail="Recommendation not found")
     rec.dismissed_at = datetime.now(timezone.utc)
     await db.commit()
@@ -271,13 +306,15 @@ async def dismiss_recommendation(
 @insights_router.get("/enforcement-summary", response_model=EnforcementSummary)
 async def get_enforcement_summary(
     hours: int = Query(24, ge=1, le=720),
+    team_id: Optional[str] = Query(None, description="Restrict to one team (platform admins: all teams when omitted)"),
     identity: Identity = Depends(get_identity),
     db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Today's policy decision counts and estimated cost savings."""
     since = datetime.now(timezone.utc) - timedelta(hours=hours)
+    team_sql, team_params = _team_sql(_visible_teams(identity, team_id))
 
-    result = await db.execute(text("""
+    result = await db.execute(text(f"""
         SELECT
             COUNT(*) FILTER (WHERE decision = 'allow')    AS allowed,
             COUNT(*) FILTER (WHERE decision = 'deny')     AS blocked,
@@ -289,21 +326,92 @@ async def get_enforcement_summary(
                 THEN COALESCE(request_estimated_cost, 0) ELSE 0 END
             ), 0)                                          AS savings
         FROM policy_decisions
-        WHERE team_id = :team_id
+        WHERE {team_sql}
           AND decided_at >= :since
-    """), {"team_id": identity.team_id, "since": since})
+    """), {**team_params, "since": sqlite_dt(since)})
 
     row = result.fetchone()
     period = f"last {hours}h" if hours < 24 else "today"
 
+    blocked = int(row.blocked or 0)
+    throttle = int(row.throttle or 0)
+    # Plain "allow" decisions are not stored (too high volume, see PolicyDecision),
+    # so calls that passed enforcement are derived from metered usage instead.
+    allowed = int(row.allowed or 0)
+    if allowed == 0:
+        calls = await _metered_calls_since(db, since, team_sql, team_params, hours)
+        allowed = max(calls - blocked - throttle, 0)
+
     return EnforcementSummary(
-        allowed=int(row.allowed or 0),
-        blocked=int(row.blocked or 0),
-        throttle=int(row.throttle or 0),
+        allowed=allowed,
+        blocked=blocked,
+        throttle=throttle,
         redirect=int(row.redirect or 0),
-        total_decisions=int(row.total or 0),
+        total_decisions=int(row.total or 0) + allowed - int(row.allowed or 0),
         total_savings=float(row.savings or 0),
         period=period,
+    )
+
+
+async def _metered_calls_since(db, since, team_sql, team_params, hours) -> int:
+    """Metered call count since ``since`` (hourly rows for recent windows, else daily)."""
+    granularity = "hourly" if hours <= 168 else "daily"
+    floor = since.replace(minute=0, second=0, microsecond=0)
+    if granularity == "daily":
+        floor = floor.replace(hour=0)
+    res = await db.execute(text(f"""
+        SELECT COALESCE(SUM(call_count), 0) AS calls
+        FROM usage_aggregates
+        WHERE granularity = :g AND period_start >= :since AND {team_sql}
+    """), {**team_params, "g": granularity, "since": sqlite_dt(floor)})
+    return int(res.scalar() or 0)
+
+
+# ── GET /insights/ops-kpis ────────────────────────────────────────────────────
+
+@insights_router.get("/ops-kpis", response_model=OpsKpis)
+async def get_ops_kpis(
+    team_id: Optional[str] = Query(None, description="Restrict to one team"),
+    identity: Identity = Depends(get_identity),
+    db: AsyncSession = Depends(get_session),
+):
+    """Operational KPIs for the DevOps view, computed from stored data only."""
+    now = datetime.now(timezone.utc)
+    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    hour_start = now.replace(minute=0, second=0, microsecond=0)
+    teams = _visible_teams(identity, team_id)
+    team_sql, team_params = _team_sql(teams)
+
+    usage = (await db.execute(text(f"""
+        SELECT
+            COALESCE(SUM(call_count), 0)  AS calls,
+            COALESCE(SUM(total_tokens), 0) AS tokens,
+            COALESCE(SUM(CASE WHEN period_start >= :hour THEN total_cost ELSE 0 END), 0) AS hour_cost,
+            COALESCE(SUM(CASE WHEN duration_ms_sum IS NOT NULL THEN call_count ELSE 0 END), 0) AS timed_calls,
+            COALESCE(SUM(duration_ms_sum), 0) AS duration_sum
+        FROM usage_aggregates
+        WHERE granularity = 'hourly' AND period_start >= :day AND {team_sql}
+    """), {**team_params, "day": sqlite_dt(day_start), "hour": sqlite_dt(hour_start)})).one()
+
+    decisions = (await db.execute(text(f"""
+        SELECT
+            COUNT(*) FILTER (WHERE decision = 'deny')     AS blocked,
+            COUNT(*) FILTER (WHERE decision = 'throttle') AS throttled
+        FROM policy_decisions
+        WHERE decided_at >= :day AND {team_sql}
+    """), {**team_params, "day": sqlite_dt(day_start)})).one()
+
+    calls = int(usage.calls or 0)
+    timed = int(usage.timed_calls or 0)
+    return OpsKpis(
+        window_start=day_start,
+        cost_this_hour=float(usage.hour_cost or 0),
+        blocked_today=int(decisions.blocked or 0),
+        throttled_today=int(decisions.throttled or 0),
+        calls_today=calls,
+        tokens_per_call=round(float(usage.tokens or 0) / calls, 1) if calls else None,
+        avg_latency_ms=round(float(usage.duration_sum or 0) / timed, 1) if timed else None,
+        latency_samples=timed,
     )
 
 
@@ -336,8 +444,7 @@ async def get_forecast(
     )
 
     # Scope to requesting team unless platform admin
-    if not identity.is_platform_admin:
-        q = q.where(SpendForecast.team_id == identity.team_id)
+    q = q.where(team_scope_clause(SpendForecast.team_id, _visible_teams(identity)))
 
     rows = (await db.execute(q)).scalars().all()
 
@@ -363,6 +470,7 @@ async def get_forecast(
 @reports_router.get("/roi", response_model=RoiResponse)
 async def get_roi(
     days: int = Query(30, ge=1, le=365),
+    team_id: Optional[str] = Query(None, description="Restrict to one team (platform admins: all teams when omitted)"),
     identity: Identity = Depends(get_identity),
     db: AsyncSession = Depends(get_session, scope="function"),
 ):
@@ -372,9 +480,10 @@ async def get_roi(
     """
     since = datetime.now(timezone.utc) - timedelta(days=days)
     period = f"last {days}d" if days != 30 else "MTD"
+    team_sql, team_params = _team_sql(_visible_teams(identity, team_id))
 
     # Savings from blocked calls
-    roi_result = await db.execute(text("""
+    roi_result = await db.execute(text(f"""
         SELECT
             COUNT(*) FILTER (WHERE decision = 'deny')  AS blocked_calls,
             COALESCE(SUM(
@@ -382,23 +491,23 @@ async def get_roi(
                 THEN COALESCE(request_estimated_cost, 0) ELSE 0 END
             ), 0) AS estimated_savings
         FROM policy_decisions
-        WHERE team_id = :team_id
+        WHERE {team_sql}
           AND decided_at >= :since
-    """), {"team_id": identity.team_id, "since": since})
+    """), {**team_params, "since": sqlite_dt(since)})
     roi_row = roi_result.fetchone()
 
     # Top policy by block count
-    top_policy_result = await db.execute(text("""
+    top_policy_result = await db.execute(text(f"""
         SELECT policy_id, COUNT(*) AS blocks
         FROM policy_decisions
-        WHERE team_id = :team_id
+        WHERE {team_sql}
           AND decided_at >= :since
           AND decision = 'deny'
           AND policy_id IS NOT NULL
         GROUP BY policy_id
         ORDER BY blocks DESC
         LIMIT 1
-    """), {"team_id": identity.team_id, "since": since})
+    """), {**team_params, "since": sqlite_dt(since)})
     top_row = top_policy_result.fetchone()
 
     top_policy_name = None
@@ -413,13 +522,19 @@ async def get_roi(
         if pol_row:
             top_policy_name = pol_row.name
 
+    blocked_calls = int(roi_row.blocked_calls or 0)
+    savings = float(roi_row.estimated_savings or 0)
+    platform_cost = 0.0
     return RoiResponse(
         period=period,
-        blocked_calls=int(roi_row.blocked_calls or 0),
-        estimated_savings=float(roi_row.estimated_savings or 0),
+        blocked_calls=blocked_calls,
+        estimated_savings=savings,
         top_policy=top_policy_name,
         top_policy_blocks=top_policy_blocks,
-        platform_cost_usd=0.0,
+        platform_cost_usd=platform_cost,
+        net_savings=savings - platform_cost,
+        cost_per_blocked=(savings / blocked_calls) if blocked_calls else None,
+        roi_multiple=(savings / platform_cost) if platform_cost else None,
     )
 
 
@@ -449,7 +564,9 @@ async def get_chargeback(
         period_start = now - timedelta(days=30)
         period_end = now
 
-    q = text("""
+    team_sql, team_params = _team_sql(_visible_teams(identity), "ua.team_id")
+
+    q = text(f"""
         SELECT
             t.slug               AS team_slug,
             t.name               AS team_name,
@@ -465,7 +582,7 @@ async def get_chargeback(
         WHERE ua.granularity = 'daily'
           AND ua.period_start >= :start
           AND ua.period_start < :end
-          AND (CAST(:team_id AS TEXT) IS NULL OR CAST(ua.team_id AS TEXT) = CAST(:team_id AS TEXT))
+          AND {team_sql}
         GROUP BY t.slug, t.name, a.app_name, ua.provider, ua.model
         ORDER BY SUM(ua.total_cost) DESC
     """)
@@ -473,7 +590,7 @@ async def get_chargeback(
     result = await db.execute(q, {
         "start": sqlite_dt(period_start),
         "end": sqlite_dt(period_end),
-        "team_id": None if identity.is_platform_admin else identity.team_id,
+        **team_params,
     })
     rows = result.all()
 

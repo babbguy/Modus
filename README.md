@@ -25,7 +25,7 @@ infrastructure you control and sends no usage data anywhere by default.
   raises `PolicyViolationError`, optionally with a cheaper suggested model.
 - **Model routing.** Calibrated routing can send calls to cheaper models and
   escalate when output validation fails.
-- **Insights.** Anomaly detection (requires PostgreSQL; skipped on SQLite),
+- **Insights.** Anomaly detection (SQLite and PostgreSQL),
   spend forecasting, scheduled finance reports, cost-center chargeback and
   agentic cost attribution.
 - **Governance.** RBAC, SCIM provisioning, a hash-chained audit log with an
