@@ -86,6 +86,19 @@ applied with `python -m modus policy apply` (`POST /api/v1/policies/apply`),
 which validates the whole file first and then creates, updates or deactivates
 policies by name in one transaction.
 
+## Teams
+
+Teams (`orchestrator/api/teams.py`) group apps and carry the budgets, policies
+and registration token for them. They can be nested (`parent_id`, cycles are
+refused). `GET/PATCH/DELETE /api/v1/teams/{id}` and
+`POST /api/v1/teams/{id}/restore` manage one team; deletion is soft
+(`deleted_at`), keeps usage, cost and audit history, revokes the registration
+token and refuses (409) while apps or child teams remain unless they are moved
+(`reassign_to`, `reassign_children_to`) or the apps deactivated (`cascade`).
+Moving or deactivating apps clears their entries from the in-process key cache,
+so other orchestrator processes pick the change up after the app cache TTL
+(five minutes).
+
 ## Cost tracking
 
 Usage records carry provider, model, token counts, app, team and environment.
