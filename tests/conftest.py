@@ -42,6 +42,17 @@ def _reset_gateway_circuit():
     get_breaker().reset()
 
 
+@pytest.fixture(autouse=True)
+def _reset_api_rate_limiter():
+    """Clear the API request rate limiter between tests — its per-key counters
+    are module-global, so a long run of tests inside one minute would otherwise
+    start receiving 429 responses depending on timing."""
+    from orchestrator.main import _rate_limiter
+    _rate_limiter.reset()
+    yield
+    _rate_limiter.reset()
+
+
 @pytest_asyncio.fixture
 async def engine():
     eng = create_async_engine("sqlite+aiosqlite:///:memory:")

@@ -122,6 +122,12 @@ class _RateLimiter:
             self._counters[key] = (entry_window, prev_count, curr_count)
             return True
 
+    def reset(self) -> None:
+        """Forget every counter (used by the test suite between tests)."""
+        with self._lock:
+            self._counters.clear()
+            self._last_cleanup = 0.0
+
     def _cleanup(self, now: float) -> None:
         """Remove keys with no recent hits. Called under lock."""
         cutoff = now - 2 * self._window
