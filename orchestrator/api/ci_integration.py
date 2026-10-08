@@ -106,7 +106,7 @@ class PrCostResponse(BaseModel):
 async def record_deployment(
     body: DeploymentEvent,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> RegressionResult:
     """
     Record a deployment and check for cost regression.
@@ -226,7 +226,7 @@ async def _cost_per_request(
 async def pr_cost_estimate(
     body: PrCostRequest,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> PrCostResponse:
     """
     Estimate cost impact of model changes in a PR.

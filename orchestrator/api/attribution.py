@@ -127,7 +127,7 @@ async def list_sessions(
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> list[SessionSummary]:
     """List attributed sessions with summary metrics."""
     since = datetime.now(timezone.utc) - timedelta(hours=hours)
@@ -172,7 +172,7 @@ async def list_sessions(
 async def get_session_detail(
     session_id: str,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> SessionDetail:
     """Full session detail with all nodes and the call graph."""
     sess = (await db.execute(
@@ -235,7 +235,7 @@ async def top_amplification(
     min_af: float = Query(2.0, ge=0),
     limit: int = Query(20, ge=1, le=100),
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> list[AmplificationEntry]:
     """
     Top nodes by amplification factor across all sessions.
@@ -273,7 +273,7 @@ async def retry_tax_report(
     hours: int = Query(24, ge=1, le=720),
     limit: int = Query(20, ge=1, le=100),
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> list[RetryTaxEntry]:
     """
     Nodes with highest retry tax — cost of retries attributed to the node
@@ -309,7 +309,7 @@ async def defensive_spend_report(
     hours: int = Query(24, ge=1, le=720),
     limit: int = Query(20, ge=1, le=100),
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> list[DefensiveSpendEntry]:
     """
     Nodes with highest defensive spend — cost of fallback subgraphs
@@ -344,7 +344,7 @@ async def defensive_spend_report(
 async def get_trace(
     session_id: str,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """
     Deep trace data for visualization: span waterfall and call graph.

@@ -181,7 +181,7 @@ class TestResponse(BaseModel):
 @router.get("/config", response_model=NotificationConfig, summary="Get notification config")
 async def get_config(
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> NotificationConfig:
     """Return current notification channel configuration (DB-persisted).
 
@@ -200,7 +200,7 @@ async def save_config(
     body: NotificationConfig,
     request: Request,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> NotificationConfig:
     """
     Persist notification channel configuration.
@@ -244,7 +244,7 @@ async def save_config(
 async def test_all_channels(
     request: Request,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> TestResponse:
     """
     Fire a test alert payload to every enabled channel.
@@ -299,7 +299,7 @@ async def test_all_channels(
 async def test_one_channel(
     channel_name: str,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> TestResponse:
     """Fire a test alert to one specific channel by name."""
     valid_channels = {"slack", "teams", "email", "pagerduty", "webhook"}

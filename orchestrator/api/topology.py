@@ -166,7 +166,7 @@ class SelfRegisterResponse(BaseModel):
 async def self_register(
     body: SelfRegisterRequest,
     request: Request,
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> SelfRegisterResponse:
     # Extract team token from header
     raw_token = (
@@ -304,7 +304,7 @@ class TopologyReportResponse(BaseModel):
 async def report_topology(
     body: TopologyReportRequest,
     raw_key: str = Depends(get_app_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> TopologyReportResponse:
     app = await _verify_app_key(raw_key, db)
     snap = body.snapshot
@@ -421,7 +421,7 @@ class TopologyView(BaseModel):
 async def list_topology(
     team_id: Optional[str] = None,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> list[TopologyView]:
     q = select(AppTopology, App.app_id.label("app_slug"), App.app_name).\
         join(App, AppTopology.app_id == App.id)
@@ -465,7 +465,7 @@ async def list_topology(
 async def get_topology(
     app_id: str,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> TopologyView:
     # Scope by team in the query. App slugs are unique only within a team, so
     # filtering by slug alone can match rows from multiple teams and make
@@ -532,7 +532,7 @@ class TeamTokenResponse(BaseModel):
 async def generate_team_token(
     team_id: str,
     request: Request,
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> TeamTokenResponse:
     raw_key = _extract_raw_key(request)
     if not _verify_master_key(raw_key):
@@ -576,7 +576,7 @@ async def generate_team_token(
 async def revoke_team_token(
     team_id: str,
     request: Request,
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> None:
     raw_key = _extract_raw_key(request)
     if not _verify_master_key(raw_key):

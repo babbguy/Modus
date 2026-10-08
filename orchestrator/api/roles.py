@@ -102,7 +102,7 @@ class PermissionInfo(BaseModel):
 @router.get("/roles", response_model=list[RoleResponse])
 async def list_roles(
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> list[RoleResponse]:
     identity.assert_permission("roles:read")
     rows = (await db.execute(
@@ -120,7 +120,7 @@ async def create_role(
     body: RoleCreateRequest,
     request: Request,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> RoleResponse:
     identity.assert_permission("roles:write")
 
@@ -169,7 +169,7 @@ async def list_assignments(
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> list[AssignmentResponse]:
     identity.assert_permission("roles:read")
 
@@ -229,7 +229,7 @@ async def list_permissions(
 async def get_role(
     role_id: str,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> RoleResponse:
     identity.assert_permission("roles:read")
     role = (await db.execute(
@@ -250,7 +250,7 @@ async def update_role(
     body: RoleUpdateRequest,
     role_id: str,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> RoleResponse:
     identity.assert_permission("roles:write")
     role = (await db.execute(
@@ -293,7 +293,7 @@ async def delete_role(
     request: Request,
     role_id: str,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> None:
     identity.assert_permission("roles:delete")
     role = (await db.execute(
@@ -330,7 +330,7 @@ async def clone_role(
     body: RoleCloneRequest,
     role_id: str,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> RoleResponse:
     identity.assert_permission("roles:write")
 
@@ -380,7 +380,7 @@ async def assign_role(
     body: AssignmentCreateRequest,
     request: Request,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> AssignmentResponse:
     identity.assert_permission("roles:write")
 
@@ -454,7 +454,7 @@ async def revoke_assignment(
     request: Request,
     assignment_id: str,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> None:
     identity.assert_permission("roles:write")
     assignment = (await db.execute(

@@ -159,7 +159,7 @@ _pending_lock = _threading.Lock()
 async def register_app(
     body: RegisterRequest,
     request: Request,
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> RegisterResponse:
     """
     Register a new application and issue an API key.
@@ -293,7 +293,7 @@ async def register_app(
 async def rotate_key(
     app_uuid: str,
     request: Request,
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> RotateKeyResponse:
     """Rotate the API key for an app. Requires master key. Old key immediately invalid."""
     raw_key = _extract_raw_key(request)
@@ -344,7 +344,7 @@ async def list_apps(
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> list[AppResponse]:
     identity.assert_permission("apps:read")
     query = select(App, Team.slug).join(Team, App.team_id == Team.id).where(
@@ -372,7 +372,7 @@ async def list_apps(
 async def get_app(
     app_uuid: str,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> AppResponse:
     result = await db.execute(
         select(App, Team.slug).join(Team).where(
@@ -396,7 +396,7 @@ async def update_app(
     body: AppUpdateRequest,
     request: Request,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> AppResponse:
     identity.assert_permission("apps:write")
 
@@ -445,7 +445,7 @@ async def delete_app(
     app_uuid: str,
     request: Request,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> None:
     identity.assert_permission("apps:delete")
 

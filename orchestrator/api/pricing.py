@@ -173,7 +173,7 @@ def _override_to_response(o: PricingOverride) -> PricingOverrideResponse:
 async def list_pricing_models(
     provider: Optional[str] = None,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> list[GlobalPricingEntry]:
     """
     Return the global pricing table (bundled + synced prices).
@@ -213,7 +213,7 @@ async def list_overrides(
     app_id: Optional[str] = None,
     active_only: bool = True,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> list[PricingOverrideResponse]:
     """
     List pricing overrides visible to the caller.
@@ -248,7 +248,7 @@ async def create_override(
     body: PricingOverrideCreate,
     request: Request,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> PricingOverrideResponse:
     """
     Create a negotiated-rate override for a specific provider/model.
@@ -323,7 +323,7 @@ async def update_override(
     body: PricingOverrideUpdate,
     request: Request,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> PricingOverrideResponse:
     identity.assert_permission("pricing:write")
 
@@ -383,7 +383,7 @@ async def delete_override(
     override_id: str,
     request: Request,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> None:
     identity.assert_permission("pricing:write")
 
@@ -419,7 +419,7 @@ async def effective_price(
     team_id: Optional[str] = None,
     resource_type: str = "llm_call",
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> EffectivePrice:
     """
     Return the price that would actually be used for a given provider/model,
@@ -502,7 +502,7 @@ async def bulk_import_overrides(
     body: BulkImportRequest,
     request: Request,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> BulkImportResponse:
     """
     Import multiple overrides at once. Useful for loading a rate card from a
