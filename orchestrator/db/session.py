@@ -254,11 +254,17 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
 
     Usage:
         @router.get("/")
-        async def handler(db: AsyncSession = Depends(get_session)):
+        async def handler(db: AsyncSession = Depends(get_session, scope="function")):
             ...
 
     The session is committed on success and rolled back on exception.
     The connection is always returned to the pool on exit.
+
+    Always declare it as ``Depends(get_session, scope="function")``. With the
+    default "request" scope FastAPI runs the code after ``yield`` only once the
+    response has been sent, so a client would receive 201/200 before the commit
+    -- an immediate follow-up request could miss the write, and a failed commit
+    would go unreported. tests/test_commit_before_response.py enforces this.
     """
     if _session_factory is None:
         raise RuntimeError("Session factory not initialised. Call init_db() first.")

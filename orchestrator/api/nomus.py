@@ -170,7 +170,7 @@ async def nomus_regulations(identity: Identity = Depends(get_identity)):
 async def nomus_check_entry(
     cot_entry_id: str,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Check a CoT ledger entry against current regulatory ruleset.
 

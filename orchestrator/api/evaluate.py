@@ -73,7 +73,7 @@ class EvaluateResponse(BaseModel):
 async def evaluate_request(
     req: EvaluateRequest,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> EvaluateResponse:
     """
     Pre-request evaluation with enforced timeout.
@@ -350,7 +350,7 @@ class SessionInfo(BaseModel):
 async def create_session_budget(
     req: SessionBudgetCreate,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> SessionInfo:
     """Create or update a session-level budget for agent tracing."""
     identity.assert_permission("evaluate:write")
@@ -398,7 +398,7 @@ async def create_session_budget(
 @evaluate_router.get("/sessions/active", response_model=list[SessionInfo])
 async def list_active_sessions(
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> list[SessionInfo]:
     """List all active session budgets (non-zero max_budget)."""
     identity.assert_permission("evaluate:read")

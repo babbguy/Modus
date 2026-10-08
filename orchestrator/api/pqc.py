@@ -162,7 +162,7 @@ async def verify_pqc_attestation(
 @pqc_router.post("/migrate", response_model=PQCMigrateResponse)
 async def trigger_migration(
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Trigger PQC migration of existing attestations (admin only)."""
     if not identity.is_platform_admin:

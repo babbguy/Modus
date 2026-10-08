@@ -86,7 +86,7 @@ async def list_entries(
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> list[CoTEntryResponse]:
     """List CoT Ledger entries with optional filters."""
     query = select(CoTLedgerEntry).order_by(desc(CoTLedgerEntry.created_at))
@@ -130,7 +130,7 @@ async def list_entries(
 async def get_entry(
     entry_id: str,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> CoTEntryResponse:
     """Get a single CoT Ledger entry by ID."""
     entry = await db.get(CoTLedgerEntry, entry_id)
@@ -147,7 +147,7 @@ async def verify_chain(
     start_seq: int = Query(0, ge=0),
     end_seq: Optional[int] = None,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> ChainVerifyResponse:
     """Verify the hash chain integrity for a team."""
     from orchestrator.core.cot_ledger import verify_chain as _verify
@@ -168,7 +168,7 @@ async def verify_chain(
 async def get_stats(
     team_id: Optional[str] = None,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> CoTStatsResponse:
     """Get summary statistics for the CoT Ledger."""
     base_filter = []
@@ -228,7 +228,7 @@ async def export_entries(
     date_to: Optional[datetime] = None,
     limit: int = Query(1000, ge=1, le=10000),
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Export CoT Ledger entries as JSON or CSV."""
     query = select(CoTLedgerEntry).order_by(CoTLedgerEntry.seq_num)

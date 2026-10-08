@@ -164,7 +164,7 @@ async def get_anomalies(
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Recent anomaly events for the requesting team."""
     since = datetime.now(timezone.utc) - timedelta(hours=hours)
@@ -213,7 +213,7 @@ async def get_recommendations(
     limit: int = Query(20, ge=1, le=500),
     offset: int = Query(0, ge=0),
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Model optimization recommendations for the requesting team."""
     q = select(OptimizationRecommendation).where(
@@ -256,7 +256,7 @@ async def get_recommendations(
 async def dismiss_recommendation(
     rec_id: str,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     rec = await db.get(OptimizationRecommendation, rec_id)
     if not rec or rec.team_id != identity.team_id:
@@ -272,7 +272,7 @@ async def dismiss_recommendation(
 async def get_enforcement_summary(
     hours: int = Query(24, ge=1, le=720),
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Today's policy decision counts and estimated cost savings."""
     since = datetime.now(timezone.utc) - timedelta(hours=hours)
@@ -312,7 +312,7 @@ async def get_enforcement_summary(
 @insights_router.get("/forecast", response_model=list[ForecastResponse])
 async def get_forecast(
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Latest spend forecasts. Returns per-team forecasts the identity can see."""
     # Get latest forecast per team using a subquery
@@ -364,7 +364,7 @@ async def get_forecast(
 async def get_roi(
     days: int = Query(30, ge=1, le=365),
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """
     ROI from Modus policy enforcement.
@@ -430,7 +430,7 @@ async def get_chargeback(
     period: Optional[str] = Query(None,
                                    description="Period: YYYY-MM, or omit for last 30d"),
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Chargeback data by team. Returns JSON; use ?format=csv for CSV export."""
     now = datetime.now(timezone.utc)
@@ -497,7 +497,7 @@ async def get_chargeback(
 @admin_router.get("/settings", response_model=list[SettingResponse])
 async def list_settings(
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """List all system settings. Platform admin only."""
     if not identity.is_platform_admin:
@@ -541,7 +541,7 @@ async def update_setting(
     key: str,
     payload: SettingUpdate,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Update a single system setting. Takes effect within 30 seconds."""
     if not identity.is_platform_admin:
@@ -635,7 +635,7 @@ class NlQueryResponse(BaseModel):
 async def natural_language_query(
     body: NlQueryRequest,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """
     Translate a natural language question about AI spend into a SQL query,

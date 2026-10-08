@@ -181,7 +181,7 @@ class TestResponse(BaseModel):
 @router.get("/config", response_model=NotificationConfig, summary="Get notification config")
 async def get_config(
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> NotificationConfig:
     """Return current notification channel configuration (DB-persisted).
 
@@ -200,7 +200,7 @@ async def save_config(
     body: NotificationConfig,
     request: Request,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> NotificationConfig:
     """
     Persist notification channel configuration.
