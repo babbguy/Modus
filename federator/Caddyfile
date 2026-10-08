@@ -1,0 +1,91 @@
+# Modus Federator — Caddy Static-First Architecture
+# ====================================================
+# Reads:  Caddy serves pre-computed static JSON files directly (~0ms, ~0 CPU)
+# Writes: Caddy proxies POST requests to the minimal Python write handler
+#
+# This eliminates the need for a persistent Python process for reads.
+# RAM usage: ~10MB (Caddy only) when idle.
+#
+# Replace federator.example.com with your actual domain.
+# Caddy automatically provisions Let's Encrypt TLS certificates.
+
+federator.example.com {
+    # Security headers (all responses)
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "no-referrer"
+        Content-Type "application/json"
+        -Server
+    }
+
+    # ── Health check (Caddy responds directly, no Python) ────────
+    handle /health {
+        respond `{"status":"ok","service":"modus-federator","mode":"static-first"}` 200
+    }
+
+    handle /ready {
+        respond `{"status":"ready","mode":"static-first"}` 200
+    }
+
+    # ── Static read endpoints (pre-computed JSON files) ──────────
+    # These are regenerated every hour by the aggregation cron.
+    # Caddy serves them directly from disk — zero Python overhead.
+
+    handle /v1/portal {
+        rewrite * /portal.json
+        root * /data/static
+        file_server
+    }
+
+    handle /v1/benchmarks {
+        rewrite * /benchmarks.json
+        root * /data/static
+        file_server
+    }
+
+    handle /v1/results {
+        rewrite * /results/all.json
+        root * /data/static
+        file_server
+    }
+
+    handle /v1/results/* {
+        # /v1/results/healthcare → /results/healthcare.json
+        uri strip_prefix /v1/results
+        uri path_regexp (.+) {1}.json
+        root * /data/static/results
+        file_server
+    }
+
+    handle /v1/audit/merkle-root {
+        rewrite * /audit/merkle-root.json
+        root * /data/static
+        file_server
+    }
+
+    # ── Write endpoints (proxied to Python write handler) ────────
+    # Only POST requests go to Python. The write handler starts
+    # via systemd socket activation — zero RAM when idle.
+
+    handle /v1/deltas {
+        reverse_proxy localhost:8444
+    }
+
+    handle /v1/audit/verify-inclusion {
+        reverse_proxy localhost:8444
+    }
+
+    # ── Catch-all ────────────────────────────────────────────────
+    handle {
+        respond `{"detail":"Not found"}` 404
+    }
+
+    log {
+        output file /var/log/caddy/access.log {
+            roll_size 10mb
+            roll_keep 3
+        }
+    }
+}

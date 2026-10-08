@@ -1,0 +1,145 @@
+# Modus Budget-as-Code — Example Policy File
+# ==============================================
+# Needs the SDK installed (pip install ./sdk) and PyYAML (pip install pyyaml).
+# Set MODUS_URL and MODUS_MASTER_API_KEY (in jwt mode, an admin JWT) first.
+# Validate:   python -m modus policy validate modus-policy.yaml
+# Plan:       python -m modus policy plan modus-policy.yaml
+# Apply:      python -m modus policy apply modus-policy.yaml
+# Export:     python -m modus policy export > modus-policy.yaml
+#
+# `team:` is looked up by the team's SLUG first, then its exact name, then its
+# UUID; `app:` by the app's app_id (or UUID) within that team. Change
+# `engineering` below to match your team. A file with an unknown team/app or an
+# invalid config is rejected as a whole (HTTP 422) and nothing is applied.
+# `apply` deactivates active policies that are not in the file.
+
+version: "1"
+
+defaults:
+  scope: team
+  effect: deny
+  team: engineering
+
+policies:
+  # ── Budget Controls ──────────────────────────────────────────────────────────
+
+  - name: daily-spend-cap
+    type: budget_cap
+    description: Hard daily budget cap across all providers
+    priority: 10
+    config:
+      cap_usd: "500.00"
+      period: daily
+    action:
+      message: "Daily AI budget exhausted. Resets at midnight UTC."
+
+  - name: monthly-spend-cap
+    type: budget_cap
+    description: Monthly budget with early warning
+    priority: 20
+    effect: warn
+    config:
+      cap_usd: "10000.00"
+      period: monthly
+    action:
+      message: "Monthly spend approaching limit."
+
+  # ── Rate Limits ──────────────────────────────────────────────────────────────
+
+  - name: per-app-rate-limit
+    type: rate_limit
+    description: Prevent runaway loops
+    scope: app
+    app: my-chatbot
+    config:
+      max_calls: 1000
+      window_seconds: 3600
+    effect: throttle
+    action:
+      retry_after_seconds: 30
+      message: "Rate limit reached. Throttling for 30s."
+
+  # ── Model Governance ─────────────────────────────────────────────────────────
+
+  - name: approved-models-only
+    type: model_allowlist
+    description: Only allow approved models in production
+    priority: 5
+    conditions:
+      environments:
+        - production
+    config:
+      models:
+        - claude-sonnet-4-20250514
+        - claude-haiku-4-5-20251001
+        - gpt-4o-mini
+        - gpt-4o
+    action:
+      message: "Model not approved for production use."
+
+  - name: block-expensive-models
+    type: model_denylist
+    description: Block high-cost models unless explicitly allowed
+    conditions:
+      environments:
+        - production
+        - staging
+    config:
+      models:
+        - claude-opus-4-6
+        - o1-preview
+    suggested_model: claude-sonnet-4-20250514
+    action:
+      message: "This model is restricted. Use the suggested alternative."
+
+  # ── Provider Controls ────────────────────────────────────────────────────────
+
+  - name: block-unapproved-providers
+    type: provider_block
+    description: Only allow vetted providers
+    config:
+      providers:
+        - cohere
+        - mistral
+    action:
+      message: "Provider not approved. Contact platform team."
+
+  # ── Environment Safety ───────────────────────────────────────────────────────
+
+  - name: no-prod-in-dev
+    type: environment_block
+    description: Prevent dev environments from using production keys
+    scope: platform
+    config:
+      environments:
+        - development
+        - test
+
+  # ── Token Limits ─────────────────────────────────────────────────────────────
+
+  - name: daily-token-cap
+    type: token_cap
+    description: Cap daily token usage per team
+    config:
+      max_tokens: 5000000
+      period: daily
+    action:
+      message: "Daily token limit reached."
+
+  # ── Degradation Ladder ───────────────────────────────────────────────────────
+
+  - name: cost-degradation-ladder
+    type: degradation_ladder
+    description: Progressively downshift models as budget depletes
+    config:
+      budget_usd: "1000.00"
+      period: monthly
+      tiers:
+        - pct: 50
+          model: claude-sonnet-4-20250514
+        - pct: 75
+          model: claude-haiku-4-5-20251001
+        - pct: 90
+          model: gpt-4o-mini
+        - pct: 100
+          action: deny

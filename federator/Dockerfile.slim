@@ -1,0 +1,49 @@
+# Modus Federator — Slim Dockerfile (Static-First Architecture)
+# ==================================================================
+# Two-stage build: write handler + aggregation cron.
+# No persistent Python process for reads — Caddy serves static JSON.
+#
+# Final image: ~45MB (vs ~150MB for full FastAPI stack)
+# Runtime RAM: ~10MB idle (Caddy only), ~60MB peak (writes)
+
+FROM python:3.12-slim AS builder
+
+WORKDIR /build
+COPY requirements-slim.txt .
+RUN pip install --no-cache-dir --no-compile --target=/deps -r requirements-slim.txt
+
+FROM python:3.12-slim
+
+# Non-root user
+RUN groupadd -r federator && useradd -r -g federator -d /opt/federator federator
+
+WORKDIR /opt/federator
+
+# Minimal deps (no FastAPI, no Pydantic)
+COPY --from=builder /deps /opt/federator/deps
+ENV PYTHONPATH=/opt/federator:/opt/federator/deps
+
+# Application code
+COPY federator/ ./federator/
+
+# Create data directories
+RUN mkdir -p /data/static/results /data/static/audit && \
+    chown -R federator:federator /data
+
+# Write empty static files so Caddy has something to serve on first boot
+RUN echo '{"status":"initializing"}' > /data/static/portal.json && \
+    echo '{"benchmarks":[],"total_industries":0,"total_contributors":0}' > /data/static/benchmarks.json && \
+    echo '{"root_hash":null,"leaf_count":0}' > /data/static/audit/merkle-root.json && \
+    chown -R federator:federator /data/static
+
+USER federator
+
+HEALTHCHECK --interval=30s --timeout=3s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8444/health')"
+
+EXPOSE 8444
+
+# Write handler only — reads served by Caddy from static files
+CMD ["python", "-m", "uvicorn", "federator.write_handler:app", \
+     "--host", "0.0.0.0", "--port", "8444", "--workers", "1", \
+     "--timeout-keep-alive", "30", "--access-log"]

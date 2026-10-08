@@ -1,0 +1,122 @@
+{{- if .Values.orchestrator.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "modus.fullname" . }}-orchestrator
+  labels:
+    {{- include "modus.labels" . | nindent 4 }}
+    app.kubernetes.io/component: orchestrator
+spec:
+  replicas: {{ .Values.orchestrator.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "modus.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: orchestrator
+  template:
+    metadata:
+      labels:
+        {{- include "modus.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: orchestrator
+      annotations:
+        # Force pod restart when config changes
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.orchestrator.podSecurityContext | nindent 8 }}
+      initContainers:
+        # Run Alembic migrations before the orchestrator starts.
+        # Only one pod runs migrations — the Deployment ensures serial init.
+        - name: migrate
+          image: {{ include "modus.image" . | quote }}
+          imagePullPolicy: {{ .Values.orchestrator.image.pullPolicy }}
+          command: ["alembic", "upgrade", "heads"]
+          env:
+            {{- include "modus.dbUrlEnv" . | nindent 12 }}
+            {{- include "modus.masterKeyEnv" . | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.orchestrator.containerSecurityContext | nindent 12 }}
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+      containers:
+        - name: orchestrator
+          image: {{ include "modus.image" . | quote }}
+          imagePullPolicy: {{ .Values.orchestrator.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.orchestrator.containerSecurityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            # Migrations run in the dedicated `migrate` init container above;
+            # skip the image entrypoint's migration step so multiple replicas
+            # don't race Alembic against the same database.
+            - name: MODUS_SKIP_MIGRATIONS
+              value: "1"
+            {{- include "modus.dbUrlEnv" . | nindent 12 }}
+            {{- include "modus.masterKeyEnv" . | nindent 12 }}
+            {{- if eq .Values.orchestrator.config.authMode "jwt" }}
+            {{- include "modus.jwtSecretEnv" . | nindent 12 }}
+            - name: MODUS_JWT_AUDIENCE
+              value: {{ .Values.orchestrator.config.jwtAudience | quote }}
+            {{- with .Values.orchestrator.config.jwtIssuer }}
+            - name: MODUS_JWT_ISSUER
+              value: {{ . | quote }}
+            {{- end }}
+            {{- end }}
+            - name: MODUS_ENVIRONMENT
+              value: {{ .Values.orchestrator.config.environment | quote }}
+            - name: MODUS_LOG_LEVEL
+              value: {{ .Values.orchestrator.config.logLevel | quote }}
+            - name: MODUS_LOG_FORMAT
+              value: {{ .Values.orchestrator.config.logFormat | quote }}
+            - name: MODUS_AUTH_MODE
+              value: {{ .Values.orchestrator.config.authMode | quote }}
+            - name: MODUS_METRICS_ENABLED
+              value: {{ .Values.orchestrator.config.metricsEnabled | quote }}
+            - name: MODUS_MAX_BATCH_SIZE
+              value: {{ .Values.orchestrator.config.maxBatchSize | quote }}
+            - name: MODUS_AGGREGATE_INTERVAL_SECONDS
+              value: {{ .Values.orchestrator.config.aggregateIntervalSeconds | quote }}
+            - name: MODUS_HEARTBEAT_STALE_MINUTES
+              value: {{ .Values.orchestrator.config.heartbeatStaleMinutes | quote }}
+            - name: MODUS_CORS_ORIGINS
+              value: {{ .Values.orchestrator.config.corsOrigins | quote }}
+            - name: MODUS_DB_POOL_SIZE
+              value: {{ .Values.database.poolSize | quote }}
+            - name: MODUS_DB_MAX_OVERFLOW
+              value: {{ .Values.database.maxOverflow | quote }}
+          livenessProbe:
+            {{- toYaml .Values.orchestrator.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.orchestrator.readinessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.orchestrator.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.orchestrator.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.orchestrator.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.orchestrator.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

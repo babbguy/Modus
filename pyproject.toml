@@ -1,0 +1,27 @@
+# Modus — tooling configuration only (pytest, coverage). Not an installable package;
+# the SDK package is defined in sdk/pyproject.toml.
+# Copyright 2026 babbguy
+# SPDX-License-Identifier: Apache-2.0
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
+
+[tool.coverage.run]
+source = ["orchestrator"]
+omit = [
+    "orchestrator/core/ai_engine/*",
+    "orchestrator/db/migrations/*",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true
+# Critical-path modules must maintain high coverage
+# General floor enforced in CI via --cov-fail-under=70
+
+[tool.coverage.html]
+directory = "htmlcov"

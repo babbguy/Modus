@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "modus-agent"
+version = "1.0.0"
+description = "AI cost governance and policy enforcement for Python applications"
+readme = "README.md"
+license = {text = "Apache-2.0"}
+authors = [{name = "babbguy"}]
+requires-python = ">=3.9"
+keywords = ["ai", "cost", "governance", "llm", "anthropic", "openai", "bedrock", "policy"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Monitoring",
+]
+
+# Zero required dependencies — uses stdlib only for core functionality.
+# httpx is optional (used for async topology reporting); stdlib urllib is the default.
+dependencies = []
+
+[project.optional-dependencies]
+async = ["httpx>=0.25.0"]
+embeddings = ["numpy", "onnxruntime"]
+otel = [
+    "opentelemetry-api>=1.20.0",
+    "opentelemetry-sdk>=1.20.0",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.20.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.20.0",
+]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+    "anthropic>=0.25.0",
+    "openai>=1.12.0",
+    "boto3>=1.34.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/babbguy/Modus"
+Documentation = "https://github.com/babbguy/Modus/tree/main/docs"
+Repository = "https://github.com/babbguy/Modus"
+Issues = "https://github.com/babbguy/Modus/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["modus*"]
+
+[tool.setuptools.package-data]
+modus = ["py.typed"]

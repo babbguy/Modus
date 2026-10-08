@@ -1,0 +1,22 @@
+# Modus Federator — Aggregation Timer
+# =========================================
+# Runs every hour to:
+#   1. Compute aggregate statistics from delta metadata
+#   2. Build Merkle tree for audit trail
+#   3. Write pre-computed static JSON files for Caddy
+#
+# RAM: ~40MB for ~5 seconds, then exits.
+#
+# Install: sudo cp federator-aggregate.timer /etc/systemd/system/
+# Enable:  sudo systemctl enable --now federator-aggregate.timer
+
+[Unit]
+Description=Modus Federator Hourly Aggregation
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=120
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,17 @@
+# Modus Federator — Dependencies
+# Minimal footprint. No unnecessary packages.
+
+# Web framework
+fastapi>=0.110.0,<1.0
+uvicorn[standard]>=0.27.0,<1.0
+
+# Database (async SQLite default, PostgreSQL optional)
+sqlalchemy[asyncio]>=2.0.25,<3.0
+aiosqlite>=0.19.0,<1.0
+
+# Auth
+PyJWT>=2.8.0,<3.0
+
+# Settings
+pydantic>=2.5.0,<3.0
+pydantic-settings>=2.1.0,<3.0

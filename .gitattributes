@@ -1,0 +1,11 @@
+# Normalize line endings in the repository; shell scripts and Docker files
+# must keep LF so images built from a Windows checkout still run.
+* text=auto
+*.sh text eol=lf
+Dockerfile* text eol=lf
+*.png binary
+*.jpg binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary

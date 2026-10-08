@@ -1,0 +1,31 @@
+# Modus Conductor — Python Dependencies
+# =================================================
+# The Conductor is lightweight — aggregates data from Orchestrators,
+# serves the org-wide dashboard. No direct LLM or heavy compute.
+
+# ── Web framework ──────────────────────────────────────────────────────────────
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+uvloop==0.21.0; sys_platform != "win32"
+
+# ── Database ───────────────────────────────────────────────────────────────────
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+aiosqlite==0.20.0
+alembic==1.14.0
+psycopg2-binary==2.9.10
+
+# ── Configuration ─────────────────────────────────────────────────────────────
+pydantic==2.10.0
+pydantic-settings==2.6.0
+
+# ── Security ───────────────────────────────────────────────────────────────────
+bcrypt==4.2.0
+PyJWT[crypto]==2.9.0
+cryptography==44.0.0
+
+# ── Observability ─────────────────────────────────────────────────────────────
+prometheus-client==0.21.0
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+python-multipart==0.0.18

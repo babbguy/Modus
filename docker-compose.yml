@@ -1,0 +1,57 @@
+# Modus — Production deploy (PostgreSQL + multi-service)
+# Copyright 2026 babbguy
+# SPDX-License-Identifier: Apache-2.0
+# Usage: cp .env.example .env && docker compose up --build -d
+# Dashboard: http://localhost:8080
+
+name: modus
+
+services:
+  modus:
+    build: .
+    ports: ["8080:8080"]
+    env_file: .env
+    environment:
+      - MODUS_DATABASE_URL=postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-CHANGE_ME_BEFORE_PRODUCTION}@db:5432/modus
+      - MODUS_PORT=8080
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    volumes:
+      - ./plugins:/app/plugins
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: modus
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-CHANGE_ME_BEFORE_PRODUCTION}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports: ["127.0.0.1:5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
+
+volumes:
+  postgres_data:

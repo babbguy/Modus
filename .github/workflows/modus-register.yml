@@ -1,0 +1,253 @@
+# .github/workflows/modus-register.yml
+#
+# Reusable workflow — lives in your shared-workflows repo.
+# Application repos call this workflow to register with Modus
+# and write their API key to GitHub secrets automatically.
+#
+# Inputs:
+#   app-id          — slug for this app, e.g. "document-processor"
+#   team-slug       — team slug, e.g. "data-science"
+#   app-name        — human name, defaults to repo name
+#   environment     — production | staging | dev (default: production)
+#   orchestrator-url-secret — secret name in calling repo (default: MODUS_ORCHESTRATOR_URL)
+#   master-key-secret       — secret name in calling repo (default: MODUS_MASTER_KEY)
+#
+# Outputs (written to calling repo secrets):
+#   MODUS_API_KEY
+#   MODUS_ORCHESTRATOR_URL
+#   MODUS_APP_ID
+#
+# Usage in calling repo:
+#
+#   jobs:
+#     modus:
+#       uses: your-org/shared-workflows/.github/workflows/modus-register.yml@main
+#       with:
+#         app-id: my-app
+#         team-slug: my-team
+#       secrets:
+#         orchestrator-url: ${{ secrets.MODUS_ORCHESTRATOR_URL }}
+#         master-key: ${{ secrets.MODUS_MASTER_KEY }}
+#         github-token: ${{ secrets.WORKFLOW_GITHUB_TOKEN }}
+
+name: Modus — Register App
+
+on:
+  workflow_call:
+    inputs:
+      app-id:
+        description: 'App slug identifier (e.g. document-processor)'
+        required: true
+        type: string
+      team-slug:
+        description: 'Team slug (e.g. data-science)'
+        required: true
+        type: string
+      app-name:
+        description: 'Human-readable app name (defaults to repository name)'
+        required: false
+        type: string
+        default: ''
+      environment:
+        description: 'Deployment environment: production | staging | dev'
+        required: false
+        type: string
+        default: 'production'
+      orchestrator-url-secret:
+        description: 'Name of secret holding the orchestrator URL'
+        required: false
+        type: string
+        default: 'MODUS_ORCHESTRATOR_URL'
+      master-key-secret:
+        description: 'Name of secret holding the master key'
+        required: false
+        type: string
+        default: 'MODUS_MASTER_KEY'
+    secrets:
+      orchestrator-url:
+        description: 'Orchestrator base URL (e.g. https://modus-api.your-org.com)'
+        required: true
+      master-key:
+        description: 'Modus master API key (mds_master_...)'
+        required: true
+      github-token:
+        description: 'GitHub token with secrets:write permission on calling repo'
+        required: true
+    outputs:
+      app-registered:
+        description: 'Whether app was successfully registered or already existed'
+        value: ${{ jobs.register.outputs.app-registered }}
+      app-uuid:
+        description: 'Modus internal UUID for this app'
+        value: ${{ jobs.register.outputs.app-uuid }}
+
+jobs:
+  register:
+    name: Register with Modus
+    runs-on: ubuntu-latest
+    outputs:
+      app-registered: ${{ steps.register.outputs.registered }}
+      app-uuid: ${{ steps.register.outputs.app-uuid }}
+
+    steps:
+      - name: Resolve app name
+        id: resolve-name
+        env:
+          APP_NAME_INPUT: ${{ inputs.app-name }}
+          REPO_NAME: ${{ github.event.repository.name }}
+        run: |
+          if [ -n "${APP_NAME_INPUT}" ]; then
+            echo "name=${APP_NAME_INPUT}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=${REPO_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Register or rotate app
+        id: register
+        env:
+          ORCHESTRATOR_URL: ${{ secrets.orchestrator-url }}
+          MASTER_KEY: ${{ secrets.master-key }}
+          APP_ID: ${{ inputs.app-id }}
+          TEAM_SLUG: ${{ inputs.team-slug }}
+          APP_NAME: ${{ steps.resolve-name.outputs.name }}
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          set -euo pipefail
+
+          echo "Registering app: ${APP_ID} (team: ${TEAM_SLUG}, env: ${ENVIRONMENT})"
+
+          # POST /api/v1/apps/register takes app_id, app_name, team_slug, environment
+          # and answers with app_id, app_name, team_slug, environment, api_key,
+          # api_key_prefix (there is no "id" field; the UUID is looked up below).
+          BODY=$(jq -n --arg app_id "$APP_ID" --arg app_name "$APP_NAME" \
+                       --arg team_slug "$TEAM_SLUG" --arg environment "$ENVIRONMENT" \
+                       '{app_id: $app_id, app_name: $app_name, team_slug: $team_slug, environment: $environment}')
+
+          HTTP_CODE=$(curl -s -o /tmp/modus_response.json -w "%{http_code}" \
+            -X POST "${ORCHESTRATOR_URL}/api/v1/apps/register" \
+            -H "Content-Type: application/json" \
+            -H "X-Modus-APIKey: ${MASTER_KEY}" \
+            -d "$BODY")
+
+          # Find the app's internal UUID (GET /api/v1/apps returns a JSON array).
+          # Registration is written asynchronously, so retry briefly.
+          lookup_uuid() {
+            for _ in 1 2 3 4 5 6 7 8 9 10; do
+              curl -s -o /tmp/modus_apps.json \
+                -H "X-Modus-APIKey: ${MASTER_KEY}" \
+                "${ORCHESTRATOR_URL}/api/v1/apps?limit=500"
+              UUID=$(jq -r --arg a "$APP_ID" --arg t "$TEAM_SLUG" \
+                '[.[] | select(.app_id == $a and .team_slug == $t)] | first | .id // empty' \
+                /tmp/modus_apps.json 2>/dev/null || true)
+              if [ -n "$UUID" ]; then echo "$UUID"; return 0; fi
+              sleep 2
+            done
+            return 1
+          }
+
+          if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "201" ]; then
+            echo "Registration successful (HTTP ${HTTP_CODE})"
+            API_KEY=$(jq -r '.api_key // empty' /tmp/modus_response.json)
+            if [ -z "$API_KEY" ]; then
+              echo "ERROR: api_key not found in response"
+              exit 1
+            fi
+            echo "::add-mask::${API_KEY}"
+            APP_UUID=$(lookup_uuid || true)
+
+          elif [ "$HTTP_CODE" = "409" ]; then
+            echo "App already registered (HTTP 409). Rotating key..."
+            APP_UUID=$(lookup_uuid) || { echo "ERROR: Could not resolve app UUID for rotation"; exit 1; }
+
+            ROTATE_CODE=$(curl -s -o /tmp/modus_rotate.json -w "%{http_code}" \
+              -X POST "${ORCHESTRATOR_URL}/api/v1/apps/${APP_UUID}/rotate-key" \
+              -H "X-Modus-APIKey: ${MASTER_KEY}")
+            if [ "$ROTATE_CODE" != "200" ]; then
+              echo "ERROR: Key rotation failed (HTTP ${ROTATE_CODE})"
+              exit 1
+            fi
+            API_KEY=$(jq -r '.api_key // empty' /tmp/modus_rotate.json)
+            if [ -z "$API_KEY" ]; then
+              echo "ERROR: api_key not found in rotation response"
+              exit 1
+            fi
+            echo "::add-mask::${API_KEY}"
+
+          else
+            echo "ERROR: Unexpected HTTP status ${HTTP_CODE}"
+            jq -r '.detail // .' /tmp/modus_response.json || true
+            exit 1
+          fi
+
+          echo "registered=true" >> "$GITHUB_OUTPUT"
+          echo "app-uuid=${APP_UUID:-}" >> "$GITHUB_OUTPUT"
+          echo "MODUS_NEW_API_KEY=${API_KEY}" >> "$GITHUB_ENV"
+
+      - name: Write secrets to calling repository
+        env:
+          GH_TOKEN: ${{ secrets.github-token }}
+          ORCHESTRATOR_URL: ${{ secrets.orchestrator-url }}
+        run: |
+          set -euo pipefail
+
+          REPO="${{ github.repository }}"
+
+          echo "Writing MODUS_API_KEY to ${REPO} secrets..."
+          gh secret set MODUS_API_KEY \
+            --repo "${REPO}" \
+            --body "${MODUS_NEW_API_KEY}"
+
+          echo "Writing MODUS_ORCHESTRATOR_URL to ${REPO} secrets..."
+          gh secret set MODUS_ORCHESTRATOR_URL \
+            --repo "${REPO}" \
+            --body "${ORCHESTRATOR_URL}"
+
+          echo "Writing MODUS_APP_ID to ${REPO} secrets..."
+          gh secret set MODUS_APP_ID \
+            --repo "${REPO}" \
+            --body "${{ inputs.app-id }}"
+
+          echo "Secrets written successfully."
+
+      - name: Verify registration
+        env:
+          ORCHESTRATOR_URL: ${{ secrets.orchestrator-url }}
+        run: |
+          echo "Verifying agent connectivity with new key..."
+
+          HTTP_CODE=$(curl -s -o /tmp/modus_heartbeat.json -w "%{http_code}" \
+            -X POST "${ORCHESTRATOR_URL}/api/v1/heartbeat" \
+            -H "Content-Type: application/json" \
+            -H "X-Modus-APIKey: ${MODUS_NEW_API_KEY}" \
+            -d "{
+              \"app_id\": \"${{ inputs.app-id }}\",
+              \"agent_version\": \"ci-verify\",
+              \"instrumented_providers\": [],
+              \"host_info\": {\"environment\": \"github-actions\"}
+            }")
+
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "Verification successful — app is live on the dashboard."
+          else
+            echo "WARNING: Heartbeat returned HTTP ${HTTP_CODE}. Key was written but verification failed."
+            echo "Check orchestrator logs for details."
+            cat /tmp/modus_heartbeat.json
+            # Non-fatal — secrets were already written
+          fi
+
+      - name: Summary
+        run: |
+          echo "## Modus Registration" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| App ID | \`${{ inputs.app-id }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Team | \`${{ inputs.team-slug }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Environment | \`${{ inputs.environment }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| App UUID | \`${{ steps.register.outputs.app-uuid }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Secrets written | MODUS_API_KEY, MODUS_ORCHESTRATOR_URL, MODUS_APP_ID |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Install the SDK, set MODUS_URL and MODUS_TEAM_TOKEN, and make this the first import of your entry point:" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`python" >> $GITHUB_STEP_SUMMARY
+          echo "import modus  # must be the first import of your entry point" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY

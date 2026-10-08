@@ -1,0 +1,190 @@
+# .github/workflows/modus-policy-sync.yml
+#
+# Reusable workflow — Policy-from-Git CI/CD.
+# Validates, plans, and applies modus-policy.yaml on every push.
+#
+# On pull requests:  validate + plan (comment diff on PR)
+# On merge to main:  validate + apply (enforce policies)
+#
+# Inputs:
+#   policy-file        — path to policy YAML (default: modus-policy.yaml)
+#   orchestrator-url-secret — secret name (default: MODUS_ORCHESTRATOR_URL)
+#   master-key-secret       — secret name (default: MODUS_MASTER_KEY)
+#   python-version     — Python version (default: 3.12)
+#
+# Usage in application repo:
+#
+#   # .github/workflows/policy-sync.yml
+#   name: Policy Sync
+#   on:
+#     push:
+#       branches: [main]
+#       paths: [modus-policy.yaml]
+#     pull_request:
+#       paths: [modus-policy.yaml]
+#
+#   jobs:
+#     sync:
+#       uses: your-org/shared-workflows/.github/workflows/modus-policy-sync.yml@main
+#       with:
+#         policy-file: modus-policy.yaml
+#       secrets:
+#         orchestrator-url: ${{ secrets.MODUS_ORCHESTRATOR_URL }}
+#         master-key: ${{ secrets.MODUS_MASTER_KEY }}
+
+name: "Modus \u2014 Policy Sync"
+
+on:
+  workflow_call:
+    inputs:
+      policy-file:
+        description: 'Path to modus-policy.yaml in the repository'
+        required: false
+        type: string
+        default: 'modus-policy.yaml'
+      python-version:
+        description: 'Python version to use'
+        required: false
+        type: string
+        default: '3.12'
+      auto-apply:
+        description: 'Auto-apply on merge to default branch (true/false)'
+        required: false
+        type: boolean
+        default: true
+    secrets:
+      orchestrator-url:
+        description: 'Orchestrator base URL (e.g. https://modus-api.your-org.com)'
+        required: true
+      master-key:
+        description: 'Modus master API key (mds_master_...)'
+        required: true
+
+jobs:
+  validate:
+    name: Validate Policy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: Install Modus SDK
+        # modus-agent is not published on PyPI; install the SDK from the repository.
+        run: pip install "modus-agent @ git+https://github.com/babbguy/Modus.git#subdirectory=sdk" pyyaml
+
+      - name: Validate policy YAML
+        run: python -m modus policy validate ${{ inputs.policy-file }}
+
+  plan:
+    name: Plan Changes
+    needs: validate
+    runs-on: ubuntu-latest
+    outputs:
+      has-changes: ${{ steps.plan.outputs.has-changes }}
+      plan-summary: ${{ steps.plan.outputs.summary }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: Install Modus SDK
+        # modus-agent is not published on PyPI; install the SDK from the repository.
+        run: pip install "modus-agent @ git+https://github.com/babbguy/Modus.git#subdirectory=sdk" pyyaml
+
+      - name: Run policy plan
+        id: plan
+        env:
+          MODUS_URL: ${{ secrets.orchestrator-url }}
+          MODUS_MASTER_API_KEY: ${{ secrets.master-key }}
+        run: |
+          set -euo pipefail
+
+          # Capture plan output
+          python -m modus policy plan ${{ inputs.policy-file }} | tee /tmp/plan-output.txt
+          EXIT_CODE=${PIPESTATUS[0]}
+
+          # Check if there are changes
+          if grep -q "No changes needed" /tmp/plan-output.txt; then
+            echo "has-changes=false" >> $GITHUB_OUTPUT
+            echo "summary=No changes needed — current state matches desired." >> $GITHUB_OUTPUT
+          else
+            echo "has-changes=true" >> $GITHUB_OUTPUT
+            # Extract summary line
+            SUMMARY=$(grep "Plan:" /tmp/plan-output.txt || echo "Changes detected")
+            echo "summary=${SUMMARY}" >> $GITHUB_OUTPUT
+          fi
+
+          exit $EXIT_CODE
+
+      - name: Comment plan on PR
+        if: github.event_name == 'pull_request' && steps.plan.outputs.has-changes == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const plan = fs.readFileSync('/tmp/plan-output.txt', 'utf8');
+            const body = `## Modus Policy Plan
+
+            \`\`\`
+            ${plan}
+            \`\`\`
+
+            > This plan will be applied automatically when this PR is merged.
+            > To apply manually: \`python -m modus policy apply ${{ inputs.policy-file }}\``;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body,
+            });
+
+  apply:
+    name: Apply Policies
+    needs: plan
+    if: |
+      github.event_name == 'push' &&
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
+      needs.plan.outputs.has-changes == 'true' &&
+      inputs.auto-apply
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: Install Modus SDK
+        # modus-agent is not published on PyPI; install the SDK from the repository.
+        run: pip install "modus-agent @ git+https://github.com/babbguy/Modus.git#subdirectory=sdk" pyyaml
+
+      - name: Apply policies
+        env:
+          MODUS_URL: ${{ secrets.orchestrator-url }}
+          MODUS_MASTER_API_KEY: ${{ secrets.master-key }}
+        run: |
+          set -euo pipefail
+          python -m modus policy apply ${{ inputs.policy-file }}
+
+      - name: Summary
+        run: |
+          echo "## Modus Policy Applied" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| Policy file | \`${{ inputs.policy-file }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Applied by | \`${{ github.actor }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Branch | \`${{ github.ref_name }}\` |" >> $GITHUB_STEP_SUMMARY

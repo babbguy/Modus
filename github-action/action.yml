@@ -1,0 +1,154 @@
+name: 'Modus Policy Check'
+description: 'Validate and plan Modus governance policies (Budget-as-Code). Posts a PR comment with the policy plan.'
+author: 'babbguy'
+
+branding:
+  icon: 'shield'
+  color: 'blue'
+
+inputs:
+  policy-file:
+    description: 'Path to modus-policy.yaml'
+    required: false
+    default: 'modus-policy.yaml'
+  modus-url:
+    description: 'Modus orchestrator URL'
+    required: true
+  modus-token:
+    description: 'Modus master API key (mds_master_...), sent as X-Modus-APIKey; works in stub and jwt auth modes. A root credential: pass it via a secret.'
+    required: true
+  mode:
+    description: 'Action mode: validate (local only), plan (diff), or apply (deploy)'
+    required: false
+    default: 'plan'
+  python-version:
+    description: 'Python version to use'
+    required: false
+    default: '3.11'
+
+outputs:
+  valid:
+    description: 'Whether the policy file is valid (true/false)'
+  changes:
+    description: 'Number of policy changes detected'
+  plan-output:
+    description: 'Full plan output text'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install Modus SDK
+      shell: bash
+      # modus-agent is not published on PyPI. This action's own checkout
+      # (github.action_path = <repo>/github-action) contains the SDK in ../sdk,
+      # so the installed SDK always matches the action's ref.
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+      run: pip install "${ACTION_PATH}/../sdk" pyyaml
+
+    - name: Validate policy file
+      id: validate
+      shell: bash
+      run: |
+        echo "::group::Policy Validation"
+        if python -m modus policy validate "${{ inputs.policy-file }}"; then
+          echo "valid=true" >> "$GITHUB_OUTPUT"
+          echo "✅ Policy file is valid"
+        else
+          echo "valid=false" >> "$GITHUB_OUTPUT"
+          echo "❌ Policy file has errors"
+          exit 1
+        fi
+        echo "::endgroup::"
+
+    - name: Plan policy changes
+      if: inputs.mode == 'plan' || inputs.mode == 'apply'
+      id: plan
+      shell: bash
+      env:
+        MODUS_URL: ${{ inputs.modus-url }}
+        MODUS_MASTER_API_KEY: ${{ inputs.modus-token }}
+      run: |
+        echo "::group::Policy Plan"
+        OUTPUT=$(python -m modus policy plan "${{ inputs.policy-file }}" 2>&1) || true
+        echo "$OUTPUT"
+        echo "plan-output<<EOF" >> "$GITHUB_OUTPUT"
+        echo "$OUTPUT" >> "$GITHUB_OUTPUT"
+        echo "EOF" >> "$GITHUB_OUTPUT"
+
+        # Count changes
+        ADDS=$(echo "$OUTPUT" | grep -c "^ *+" || true)
+        UPDATES=$(echo "$OUTPUT" | grep -c "^ *~" || true)
+        REMOVES=$(echo "$OUTPUT" | grep -c "^ *-" || true)
+        TOTAL=$((ADDS + UPDATES + REMOVES))
+        echo "changes=$TOTAL" >> "$GITHUB_OUTPUT"
+        echo "::endgroup::"
+
+    - name: Post PR comment
+      if: (inputs.mode == 'plan' || inputs.mode == 'apply') && github.event_name == 'pull_request'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const planOutput = `${{ steps.plan.outputs.plan-output }}`;
+          const changes = `${{ steps.plan.outputs.changes }}`;
+          const mode = `${{ inputs.mode }}`;
+
+          const body = [
+            '## 🛡️ Modus Policy Check',
+            '',
+            `**Mode:** ${mode} | **Changes:** ${changes}`,
+            '',
+            '```',
+            planOutput,
+            '```',
+            '',
+            mode === 'plan'
+              ? '> 💡 Merge this PR to apply these policy changes, or run `modus policy apply` manually.'
+              : '> ✅ Policies will be applied on merge.',
+            '',
+            '---',
+            '*Posted by [Modus Policy Action](https://github.com/babbguy/Modus)*',
+          ].join('\n');
+
+          // Find existing comment to update
+          const { data: comments } = await github.rest.issues.listComments({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number,
+          });
+
+          const existing = comments.find(c =>
+            c.body.includes('## 🛡️ Modus Policy Check')
+          );
+
+          if (existing) {
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: existing.id,
+              body,
+            });
+          } else {
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+          }
+
+    - name: Apply policies
+      if: inputs.mode == 'apply'
+      shell: bash
+      env:
+        MODUS_URL: ${{ inputs.modus-url }}
+        MODUS_MASTER_API_KEY: ${{ inputs.modus-token }}
+      run: |
+        echo "::group::Policy Apply"
+        python -m modus policy apply "${{ inputs.policy-file }}"
+        echo "::endgroup::"

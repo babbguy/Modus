@@ -1,0 +1,131 @@
+name: 'Modus PR Cost Impact'
+description: 'Estimate the monthly AI cost impact of a pull request and post it as a PR comment. Estimates only — never claims exact figures.'
+author: 'babbguy'
+
+branding:
+  icon: 'dollar-sign'
+  color: 'green'
+
+inputs:
+  modus-url:
+    description: 'Modus orchestrator base URL (e.g. https://modus.internal). Mapped to MODUS_API_URL.'
+    required: true
+  modus-token:
+    description: 'Modus app API key (mds_...). Pass via a secret — mapped to MODUS_API_KEY. Never hard-code.'
+    required: true
+  app-id:
+    description: 'The Modus app_id (slug) whose call volume the estimate is projected onto.'
+    required: true
+  models:
+    description: 'Optional explicit comma/newline separated list of proposed model ids. Used in addition to the diff scan.'
+    required: false
+    default: ''
+  github-token:
+    description: 'Token used to post the PR comment. Defaults to the workflow github.token.'
+    required: false
+    default: ${{ github.token }}
+  python-version:
+    description: 'Python version to use.'
+    required: false
+    default: '3.11'
+
+outputs:
+  total-delta-usd:
+    description: 'Estimated total monthly cost delta in USD (signed).'
+    value: ${{ steps.estimate.outputs.total-delta-usd }}
+  comment:
+    description: 'The Markdown comment body that was generated.'
+    value: ${{ steps.estimate.outputs.comment }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Collect PR diff
+      id: diff
+      if: github.event_name == 'pull_request'
+      shell: bash
+      env:
+        BASE_REF: ${{ github.event.pull_request.base.ref }}
+      run: |
+        echo "::group::Collect PR diff"
+        # Requires the caller to checkout with fetch-depth: 0 so the base ref
+        # is available locally. Fall back to an empty diff if it is not.
+        if git rev-parse --verify "origin/${BASE_REF}" >/dev/null 2>&1; then
+          git diff "origin/${BASE_REF}...HEAD" > pr.diff || true
+        else
+          echo "::warning::origin/${BASE_REF} not found — checkout with 'fetch-depth: 0' for diff scanning. Proceeding with explicit models only."
+          : > pr.diff
+        fi
+        echo "lines=$(wc -l < pr.diff)" >> "$GITHUB_OUTPUT"
+        echo "::endgroup::"
+
+    - name: Estimate cost impact
+      id: estimate
+      if: github.event_name == 'pull_request'
+      shell: bash
+      env:
+        MODUS_API_URL: ${{ inputs.modus-url }}
+        MODUS_API_KEY: ${{ inputs.modus-token }}
+        MODUS_APP_ID: ${{ inputs.app-id }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        PR_URL: ${{ github.event.pull_request.html_url }}
+        EXPLICIT_MODELS: ${{ inputs.models }}
+      run: |
+        echo "::group::Modus cost estimate"
+        python "${{ github.action_path }}/pr_cost_estimate.py" \
+          --api-url "$MODUS_API_URL" \
+          --api-key "$MODUS_API_KEY" \
+          --app-id "$MODUS_APP_ID" \
+          --pr-number "$PR_NUMBER" \
+          --pr-url "$PR_URL" \
+          --diff-file pr.diff \
+          --models "$EXPLICIT_MODELS" \
+          --output-comment modus_cost_comment.md \
+          --github-output "$GITHUB_OUTPUT"
+        echo "::endgroup::"
+
+    - name: Post PR comment
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const fs = require('fs');
+          let body;
+          try {
+            body = fs.readFileSync('modus_cost_comment.md', 'utf8');
+          } catch (e) {
+            core.warning('No comment body was produced; skipping PR comment.');
+            return;
+          }
+
+          const marker = '## Modus — Estimated AI cost impact';
+
+          const { data: comments } = await github.rest.issues.listComments({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number,
+          });
+
+          const existing = comments.find(c => c.body && c.body.includes(marker));
+
+          if (existing) {
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: existing.id,
+              body,
+            });
+          } else {
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+          }

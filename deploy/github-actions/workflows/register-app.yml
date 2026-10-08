@@ -1,0 +1,130 @@
+# .github/workflows/modus-register.yml
+#
+# One-time workflow: registers this repository as a Modus application.
+# Run manually via Actions tab when first adding Modus to a repo.
+#
+# Required repo secrets:
+#   MODUS_MASTER_KEY  — master key from platform team (mds_master_...)
+#   MODUS_URL         — orchestrator base URL (e.g. https://modus.internal)
+#
+# After success, adds MODUS_API_KEY and MODUS_APP_ID as repo secrets.
+# Requires a PAT with repo scope stored as GH_PAT_SECRETS_WRITE (secrets:write is
+# not a built-in GITHUB_TOKEN permission).
+#
+# The request matches POST /api/v1/apps/register:
+#   {app_id, app_name, team_slug, environment}  ->  {app_id, api_key, api_key_prefix, ...}
+
+name: Modus — Register App
+
+on:
+  workflow_dispatch:
+    inputs:
+      team_slug:
+        description: "Team slug (e.g. platform-eng). The team is created if it does not exist."
+        required: true
+      app_id:
+        description: "App identifier: lowercase letters, digits, - or _ (e.g. recommendation-api)"
+        required: true
+      app_name:
+        description: "App display name (e.g. Recommendation API)"
+        required: true
+      environment:
+        description: "production, staging or dev"
+        required: false
+        default: "production"
+
+permissions:
+  contents: read
+
+jobs:
+  register:
+    name: Register with Modus
+    runs-on: ubuntu-latest
+    env:
+      TEAM_SLUG: ${{ inputs.team_slug }}
+      APP_ID: ${{ inputs.app_id }}
+      APP_NAME: ${{ inputs.app_name }}
+      ENVIRONMENT: ${{ inputs.environment }}
+    steps:
+      - name: Validate inputs
+        run: |
+          if [[ ! "${APP_ID}" =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
+            echo "::error::app_id must be lowercase letters, digits, '-' or '_' and start with a letter or digit"
+            exit 1
+          fi
+          if [[ ! "${TEAM_SLUG}" =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
+            echo "::error::team_slug must be lowercase letters, digits, '-' or '_'"
+            exit 1
+          fi
+          if [[ ! "${ENVIRONMENT}" =~ ^(production|staging|dev)$ ]]; then
+            echo "::error::environment must be production, staging or dev"
+            exit 1
+          fi
+
+      - name: Register application
+        id: register
+        env:
+          MODUS_URL: ${{ secrets.MODUS_URL }}
+          MODUS_MASTER_KEY: ${{ secrets.MODUS_MASTER_KEY }}
+        run: |
+          set -euo pipefail
+          BODY=$(jq -n --arg app_id "$APP_ID" --arg app_name "$APP_NAME" \
+                       --arg team_slug "$TEAM_SLUG" --arg environment "$ENVIRONMENT" \
+                       '{app_id: $app_id, app_name: $app_name, team_slug: $team_slug, environment: $environment}')
+
+          HTTP_CODE=$(curl -s -o response.json -w "%{http_code}" \
+            -X POST "${MODUS_URL}/api/v1/apps/register" \
+            -H "Content-Type: application/json" \
+            -H "X-Modus-APIKey: ${MODUS_MASTER_KEY}" \
+            -d "$BODY")
+
+          if [ "$HTTP_CODE" != "201" ] && [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::Registration failed (HTTP ${HTTP_CODE}): $(jq -r '.detail // .message // "unknown error"' response.json)"
+            exit 1
+          fi
+
+          API_KEY=$(jq -r '.api_key // empty' response.json)
+          if [ -z "$API_KEY" ]; then
+            echo "::error::Registration response contained no api_key"
+            exit 1
+          fi
+          echo "::add-mask::${API_KEY}"
+          rm -f response.json
+          echo "API_KEY=${API_KEY}" >> "$GITHUB_OUTPUT"
+
+      - name: Store API key as repo secret
+        uses: gliech/create-github-secret-action@v1
+        with:
+          pa_token: ${{ secrets.GH_PAT_SECRETS_WRITE }}
+          name: MODUS_API_KEY
+          value: ${{ steps.register.outputs.API_KEY }}
+
+      - name: Store App ID as repo secret
+        uses: gliech/create-github-secret-action@v1
+        with:
+          pa_token: ${{ secrets.GH_PAT_SECRETS_WRITE }}
+          name: MODUS_APP_ID
+          value: ${{ inputs.app_id }}
+
+      - name: Registration summary
+        run: |
+          {
+            echo "## Modus Registration Complete"
+            echo ""
+            echo "| Field | Value |"
+            echo "|-------|-------|"
+            echo "| App ID | ${APP_ID} |"
+            echo "| App Name | ${APP_NAME} |"
+            echo "| Team | ${TEAM_SLUG} |"
+            echo "| Environment | ${ENVIRONMENT} |"
+            echo "| Repository | ${{ github.repository }} |"
+            echo ""
+            echo "**Secrets added:** \`MODUS_API_KEY\`, \`MODUS_APP_ID\`"
+            echo ""
+            echo "**Next step:** install the SDK (\`pip install ./sdk\` from a clone of the repository),"
+            echo "set \`MODUS_URL\` and \`MODUS_TEAM_TOKEN\` in the application's environment, and make"
+            echo "this the first import of the application entry point:"
+            echo "\`\`\`python"
+            echo "import modus  # before any AI SDK import"
+            echo "\`\`\`"
+          } >> "$GITHUB_STEP_SUMMARY"

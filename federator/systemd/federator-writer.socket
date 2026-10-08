@@ -1,0 +1,19 @@
+# Modus Federator — Socket Activation
+# ========================================
+# The write handler only starts when a TCP connection arrives on port 8444.
+# When idle, it consumes ZERO memory.
+#
+# Install: sudo cp federator-writer.socket /etc/systemd/system/
+# Enable:  sudo systemctl enable --now federator-writer.socket
+
+[Unit]
+Description=Modus Federator Write Handler Socket
+Documentation=https://github.com/babbguy/Modus/tree/main/federator
+
+[Socket]
+ListenStream=127.0.0.1:8444
+Accept=false
+NoDelay=true
+
+[Install]
+WantedBy=sockets.target

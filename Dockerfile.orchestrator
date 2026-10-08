@@ -1,0 +1,76 @@
+# Modus Orchestrator — Production Dockerfile
+# ====================================================
+# Multi-stage build:
+#   builder — install deps in isolated layer
+#   runtime — minimal image with only what's needed to run
+
+# ── Stage 1: builder ──────────────────────────────────────────────────────────
+FROM python:3.12-slim AS builder
+
+WORKDIR /build
+
+# System deps for building Python packages with C extensions
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python deps into isolated prefix
+COPY orchestrator/requirements.txt .
+RUN pip install --prefix=/install --no-cache-dir -r requirements.txt
+
+# ── Stage 2: runtime ──────────────────────────────────────────────────────────
+FROM python:3.12-slim AS runtime
+
+# Non-root user — security hardening
+RUN groupadd -r modus && useradd -r -g modus -d /app -s /sbin/nologin modus
+
+# Runtime system deps only
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy installed packages from builder
+COPY --from=builder /install /usr/local
+
+# Copy application code
+COPY orchestrator/ ./orchestrator/
+COPY migrations/ ./migrations/
+COPY alembic.ini ./
+COPY dashboard/ ./dashboard/
+
+# Migration-aware entrypoint (runs alembic for Postgres, skips for SQLite)
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
+# Set ownership
+RUN mkdir -p /app/data && chown -R modus:modus /app
+
+USER modus
+
+# Environment defaults — override via k8s ConfigMap / Secret
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/app
+
+EXPOSE 8080
+
+# Health check — liveness probe
+HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+# Entry point
+# The entrypoint applies Alembic migrations for PostgreSQL deployments, then
+# exec's the CMD below. SQLite deployments skip migrations (init_db create_all).
+# Note: --workers 1 is intentional. Horizontal scale is via k8s replicas.
+# Multiple uvicorn workers per pod complicates graceful shutdown and health checks.
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+CMD ["uvicorn", "orchestrator.main:app", \
+     "--host", "0.0.0.0", \
+     "--port", "8080", \
+     "--workers", "1", \
+     "--loop", "auto", \
+     "--no-access-log"]

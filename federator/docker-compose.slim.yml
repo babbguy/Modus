@@ -1,0 +1,107 @@
+# Modus Federator — Slim Docker Compose (Static-First)
+# =========================================================
+# Total idle RAM: ~15MB (Caddy + no Python)
+# Total peak RAM: ~70MB (during write or aggregation)
+# Target: $3-5/month VPS
+#
+# Architecture:
+#   caddy         → TLS + serves static JSON for ALL reads
+#   writer        → Handles POST /v1/deltas only (auto-starts)
+#   aggregator    → Cron: computes stats, writes static JSON, exits
+
+services:
+  # ── Caddy: TLS + Static File Server ─────────────────────────
+  # Serves pre-computed JSON for reads. Zero Python needed.
+  caddy:
+    image: caddy:2-alpine
+    container_name: modus-caddy
+    restart: always
+    ports:
+      - "443:443"
+      - "80:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+      - static-data:/data/static:ro
+    depends_on:
+      - writer
+    deploy:
+      resources:
+        limits:
+          memory: 32M
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  # ── Write Handler: Minimal Python for POST only ─────────────
+  # Only starts when Caddy proxies a write request.
+  # Uses raw ASGI — no FastAPI, no Pydantic overhead.
+  writer:
+    build:
+      context: .
+      dockerfile: Dockerfile.slim
+    container_name: modus-writer
+    restart: always
+    environment:
+      - FEDERATOR_DB_PATH=/data/federator.db
+      - FEDERATOR_JWT_SECRET=${FEDERATOR_JWT_SECRET}
+      - FEDERATOR_MAX_PAYLOAD_BYTES=65536
+      - FEDERATOR_RATE_LIMIT_SUBMITS_PER_HOUR=10
+    volumes:
+      - federator-data:/data
+    deploy:
+      resources:
+        limits:
+          memory: 96M
+          cpus: "0.25"
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  # ── Aggregator: Hourly cron → compute stats → write JSON ────
+  # Runs once per hour, takes ~5 seconds, then sleeps.
+  # Writes static JSON files that Caddy serves.
+  aggregator:
+    build:
+      context: .
+      dockerfile: Dockerfile.slim
+    container_name: modus-aggregator
+    restart: always
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Aggregator starting — runs every hour"
+        while true; do
+          echo "[$(date -Iseconds)] Running aggregation..."
+          python -m federator.core.static_publisher 2>&1
+          echo "[$(date -Iseconds)] Aggregation complete. Sleeping 1h..."
+          sleep 3600
+        done
+    environment:
+      - FEDERATOR_DB_PATH=/data/federator.db
+      - FEDERATOR_STATIC_DIR=/data/static
+      - FEDERATOR_MIN_CONTRIBUTORS_FOR_RESULT=3
+    volumes:
+      - federator-data:/data
+      - static-data:/data/static
+    deploy:
+      resources:
+        limits:
+          memory: 96M
+          cpus: "0.25"
+    logging:
+      driver: json-file
+      options:
+        max-size: "2m"
+        max-file: "2"
+
+volumes:
+  federator-data:
+  static-data:
+  caddy-data:
+  caddy-config:

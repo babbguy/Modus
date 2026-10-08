@@ -1,0 +1,11 @@
+# Modus — Ruff Linter Configuration
+# https://docs.astral.sh/ruff/
+
+[lint]
+select = ["E", "F", "W"]
+ignore = [
+    "E402",   # Module-level import not at top — many files use conditional/late imports by design
+    "E501",   # Line too long — enforced by code review, not automated lint
+    "E712",   # == True comparisons — required for SQLAlchemy column expressions
+    "E701",   # Multiple statements on one line — used in compact registry patterns
+]

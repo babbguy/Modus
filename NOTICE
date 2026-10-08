@@ -1,0 +1,40 @@
+Modus
+Copyright 2026 babbguy
+
+This product includes software developed by babbguy.
+
+Third-party components bundled in the dashboard (dashboard/)
+------------------------------------------------------------
+These files are redistributed unmodified under their own licenses. Each
+retains its upstream copyright and license terms.
+
+  Chart.js                    (dashboard/vendor/chart.umd.min.js)
+      MIT License. Copyright (c) Chart.js Contributors.
+      https://www.chartjs.org/
+
+  chartjs-plugin-zoom 2.0.1   (dashboard/vendor/chartjs-plugin-zoom.min.js)
+      MIT License. Copyright (c) 2016-2023 chartjs-plugin-zoom Contributors.
+      https://github.com/chartjs/chartjs-plugin-zoom
+
+  Hammer.JS 2.0.7             (dashboard/vendor/hammer.min.js)
+      MIT License. Copyright (c) 2016 Jorik Tangelder.
+      http://hammerjs.github.io/
+
+  GridStack                   (dashboard/vendor/gridstack-all.min.js,
+                               gridstack.min.css, gridstack-extra.min.css)
+      MIT License. Copyright (c) GridStack contributors.
+      https://gridstackjs.com/
+
+  Font Awesome Free 7.2.0     (dashboard/fontawesome.min.css,
+                               dashboard/webfonts/)
+      Icons: CC BY 4.0. Fonts: SIL Open Font License 1.1. Code: MIT License.
+      Copyright 2026 Fonticons, Inc.
+      https://fontawesome.com/license/free
+
+  Inter                       (dashboard/fonts/inter-latin.woff2)
+      SIL Open Font License 1.1. Copyright (c) The Inter Project Authors.
+      https://rsms.me/inter/
+
+  IBM Plex Mono               (dashboard/fonts/ibm-plex-mono-latin.woff2)
+      SIL Open Font License 1.1. Copyright (c) IBM Corp.
+      https://github.com/IBM/plex

@@ -1,0 +1,110 @@
+# =============================================================================
+# Modus — Production Deployment
+# =============================================================================
+# Compose file for running Modus on your own infrastructure.
+#
+# Standalone (single app):
+#   docker compose up --build -d   (builds images from this checkout)
+#
+# Org-wide (multi-app with Conductor):
+#   docker compose --profile org-wide up --build -d
+#
+# Run from the deploy/ directory. Published images (if any) can be used by
+# dropping --build and setting MODUS_VERSION.
+#
+# All data stays on YOUR infrastructure. SQLite by default — no external DB needed.
+# Fits on a $5/mo VPS (384MB memory limit per container).
+#
+# Copyright 2026 babbguy
+# SPDX-License-Identifier: Apache-2.0
+# =============================================================================
+
+name: modus
+
+services:
+
+  # ── Orchestrator ─────────────────────────────────────────────────────────
+  # Per-application governance: collects from agents, enforces policies,
+  # serves the dashboard in standalone mode.
+  orchestrator:
+    build:
+      context: ..
+      dockerfile: Dockerfile.orchestrator
+    image: ghcr.io/babbguy/modus-orchestrator:${MODUS_VERSION:-latest}
+    container_name: modus-orchestrator
+    restart: unless-stopped
+    ports:
+      - "${MODUS_PORT:-8080}:8080"
+    env_file: .env
+    environment:
+      # Defaults to SQLite (zero-config). A Postgres deployment can select
+      # its DSN via .env / the host environment without editing this file:
+      #   MODUS_DATABASE_URL=postgresql+asyncpg://user:pass@host:5432/modus
+      - MODUS_DATABASE_URL=${MODUS_DATABASE_URL:-sqlite+aiosqlite:///data/modus.db}
+      - MODUS_PORT=8080
+    volumes:
+      - modus_data:/app/data
+      - ./plugins:/app/plugins:ro
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+          cpus: "1.0"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── Conductor (org-wide mode only) ───────────────────────────────────────
+  # Org-level aggregation: collects from N Orchestrators, validates
+  # completeness, reconciles, serves org-wide dashboard.
+  # Activate with: docker compose --profile org-wide up -d
+  conductor:
+    build:
+      context: ..
+      dockerfile: Dockerfile.conductor
+    image: ghcr.io/babbguy/modus-conductor:${MODUS_VERSION:-latest}
+    container_name: modus-conductor
+    restart: unless-stopped
+    profiles:
+      - org-wide
+    ports:
+      - "${MODUS_CONDUCTOR_PORT:-8090}:8090"
+    env_file: .env
+    environment:
+      # The Conductor keeps its own database, separate from the Orchestrator's.
+      # Defaults to SQLite; override with MODUS_CONDUCTOR_DATABASE_URL (not
+      # MODUS_DATABASE_URL) so a Postgres Orchestrator doesn't collide here.
+      - MODUS_DATABASE_URL=${MODUS_CONDUCTOR_DATABASE_URL:-sqlite+aiosqlite:///data/conductor.db}
+      - MODUS_PORT=8090
+    volumes:
+      - conductor_data:/app/data
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+          cpus: "1.0"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8090/health"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  modus_data:
+    driver: local
+  conductor_data:
+    driver: local

@@ -1,0 +1,93 @@
+# Modus — Git ignore
+# ===========================
+
+# Environment files (may contain secrets)
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Test coverage
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Docker
+.docker/
+
+# Local dev scripts (not shipped)
+start-dev.bat
+create-shortcut.ps1
+
+# Claude Code workspace files
+CLAUDE.md
+.claude/
+
+# Stress / load test scripts (development only)
+tests/stress_test.py
+tests/test_quantum_tls.py
+
+# Artifacts (profiling, stress tests, non-production tools)
+artifacts/
+
+# CRDT runtime state (generated at runtime, never committed)
+orchestrator/data/
+
+# Local database
+*.db
+*.db-wal
+*.db-shm
+
+# Tool caches
+.mypy_cache/
+.ruff_cache/
+
+# Secrets (belt-and-suspenders)
+*.pem
+*.key
+secrets/
+
+# MkDocs build output
+docs-site/site/
+
+# Generated HTML docs (build artifacts — source is the .md files)
+docs/html/
+
+# Elementor / WordPress content files (managed in WordPress, not code)
+docs/elementor-*.json
+CLAUDE.md
+
+# Internal business documents (never push to GitHub)
+*.docx
+*.xlsx
+*.pptx
+*.ics
+
+# Runtime data (local caches)
+data/
+
+# Local-only development stack (not part of the published project)
+deploy/compose/

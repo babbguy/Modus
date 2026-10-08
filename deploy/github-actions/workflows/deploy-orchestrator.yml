@@ -1,0 +1,252 @@
+# .github/workflows/modus-deploy.yml
+#
+# Builds and deploys the Modus orchestrator to Kubernetes via Helm.
+# Triggered on push to main in the modus-platform repository,
+# or manually for specific environments.
+#
+# Required secrets (platform repo):
+#   KUBE_CONFIG_STAGING   — base64-encoded kubeconfig for staging cluster
+#   KUBE_CONFIG_PROD      — base64-encoded kubeconfig for prod cluster
+#   MODUS_MASTER_KEY_STAGING
+#   MODUS_MASTER_KEY_PROD
+#   DATABASE_URL_STAGING
+#   DATABASE_URL_PROD
+#   REGISTRY             — container registry URL (e.g. 123456789.dkr.ecr.us-east-1.amazonaws.com)
+#   AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (or use OIDC)
+
+name: Deploy Modus Orchestrator
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'orchestrator/**'
+      - 'helm/**'
+      - 'migrations/**'
+      - 'Dockerfile.orchestrator'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+      image_tag:
+        description: "Image tag to deploy (default: latest main build)"
+        required: false
+
+permissions:
+  contents: read
+  id-token: write  # For OIDC auth to AWS/GCP
+
+env:
+  IMAGE_NAME: modus-orchestrator
+  HELM_RELEASE: modus
+  HELM_NAMESPACE: modus
+  HELM_CHART: ./deploy/helm/modus
+
+jobs:
+  # ------------------------------------------------------------------
+  # Build and push container image
+  # ------------------------------------------------------------------
+  build:
+    name: Build & Push Image
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.meta.outputs.version }}
+      image_digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Login to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,prefix=,format=short
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.orchestrator
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: true
+          sbom: true
+
+      - name: Image summary
+        run: |
+          echo "## Image Built" >> $GITHUB_STEP_SUMMARY
+          echo "**Tag:** ${{ steps.meta.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Digest:** ${{ steps.build.outputs.digest }}" >> $GITHUB_STEP_SUMMARY
+
+  # ------------------------------------------------------------------
+  # Deploy to staging
+  # ------------------------------------------------------------------
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: build
+    environment:
+      name: staging
+      url: https://modus-staging.internal
+    if: github.ref == 'refs/heads/main' || (github.event_name == 'workflow_dispatch' && inputs.environment == 'staging')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: v3.13.0
+
+      - name: Set kubeconfig
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBE_CONFIG_STAGING }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      - name: Determine image tag
+        id: tag
+        run: |
+          TAG="${{ inputs.image_tag || needs.build.outputs.image_tag }}"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Helm upgrade (staging)
+        run: |
+          helm upgrade ${{ env.HELM_RELEASE }} ${{ env.HELM_CHART }} \
+            --install \
+            --namespace ${{ env.HELM_NAMESPACE }} \
+            --create-namespace \
+            --set orchestrator.image.repository=${{ secrets.REGISTRY }}/${{ env.IMAGE_NAME }} \
+            --set orchestrator.image.tag=${{ steps.tag.outputs.tag }} \
+            --set orchestrator.replicaCount=2 \
+            --set orchestrator.config.environment=staging \
+            --set secrets.create=true \
+            --set-string secrets.databaseUrl="${{ secrets.DATABASE_URL_STAGING }}" \
+            --set-string secrets.masterApiKey="${{ secrets.MODUS_MASTER_KEY_STAGING }}" \
+            --set-string secrets.jwtSecret="${{ secrets.MODUS_JWT_SECRET_STAGING }}" \
+            --atomic \
+            --timeout 5m \
+            --wait
+
+      - name: Verify rollout (staging)
+        run: |
+          kubectl rollout status deployment/${{ env.HELM_RELEASE }}-orchestrator \
+            -n ${{ env.HELM_NAMESPACE }} \
+            --timeout=3m
+
+      - name: Smoke test (staging)
+        run: |
+          HEALTH=$(kubectl exec -n ${{ env.HELM_NAMESPACE }} \
+            deploy/${{ env.HELM_RELEASE }}-orchestrator \
+            -- curl -sf http://localhost:8080/health 2>/dev/null | jq -r '.status')
+          if [[ "$HEALTH" != "ok" ]]; then
+            echo "::error::Health check failed: $HEALTH"
+            exit 1
+          fi
+          echo "Health check passed: $HEALTH"
+
+  # ------------------------------------------------------------------
+  # Deploy to production (requires staging success + manual approval)
+  # ------------------------------------------------------------------
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [build, deploy-staging]
+    environment:
+      name: production
+      url: https://modus.internal
+    if: github.ref == 'refs/heads/main' || (github.event_name == 'workflow_dispatch' && inputs.environment == 'production')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: v3.13.0
+
+      - name: Set kubeconfig
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBE_CONFIG_PROD }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      - name: Determine image tag
+        id: tag
+        run: |
+          TAG="${{ inputs.image_tag || needs.build.outputs.image_tag }}"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Helm upgrade (production)
+        run: |
+          helm upgrade ${{ env.HELM_RELEASE }} ${{ env.HELM_CHART }} \
+            --install \
+            --namespace ${{ env.HELM_NAMESPACE }} \
+            --create-namespace \
+            --set orchestrator.image.repository=${{ secrets.REGISTRY }}/${{ env.IMAGE_NAME }} \
+            --set orchestrator.image.tag=${{ steps.tag.outputs.tag }} \
+            --set orchestrator.config.environment=production \
+            --set secrets.create=true \
+            --set-string secrets.databaseUrl="${{ secrets.DATABASE_URL_PROD }}" \
+            --set-string secrets.masterApiKey="${{ secrets.MODUS_MASTER_KEY_PROD }}" \
+            --set-string secrets.jwtSecret="${{ secrets.MODUS_JWT_SECRET_PROD }}" \
+            --atomic \
+            --timeout 10m \
+            --wait
+
+      - name: Verify rollout (production)
+        run: |
+          kubectl rollout status deployment/${{ env.HELM_RELEASE }}-orchestrator \
+            -n ${{ env.HELM_NAMESPACE }} \
+            --timeout=5m
+
+      - name: Smoke test (production)
+        run: |
+          HEALTH=$(kubectl exec -n ${{ env.HELM_NAMESPACE }} \
+            deploy/${{ env.HELM_RELEASE }}-orchestrator \
+            -- curl -sf http://localhost:8080/health 2>/dev/null | jq -r '.status')
+          READY=$(kubectl exec -n ${{ env.HELM_NAMESPACE }} \
+            deploy/${{ env.HELM_RELEASE }}-orchestrator \
+            -- curl -sf http://localhost:8080/ready 2>/dev/null | jq -r '.status')
+          if [[ "$HEALTH" != "ok" ]] || [[ "$READY" != "ready" ]]; then
+            echo "::error::Post-deploy health check failed — health=$HEALTH ready=$READY"
+            exit 1
+          fi
+          echo "Production deployment verified: health=$HEALTH ready=$READY"
+
+      - name: Deployment summary
+        run: |
+          echo "## Production Deployment Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Image Tag | ${{ steps.tag.outputs.tag }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Image Digest | ${{ needs.build.outputs.image_digest }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Deployed By | ${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Triggered By | ${{ github.event_name }} |" >> $GITHUB_STEP_SUMMARY

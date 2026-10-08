@@ -1,0 +1,57 @@
+# Modus Conductor — Production Dockerfile
+# ====================================================
+# Org-level data aggregation layer. Receives pushes from Orchestrators,
+# validates completeness, reconciles, serves org-wide dashboard.
+#
+# Usage: docker build -f Dockerfile.conductor -t modus-conductor .
+# Run:   docker run -p 8090:8090 modus-conductor
+
+# ── Stage 1: builder ──────────────────────────────────────────────────────────
+FROM python:3.12-slim AS builder
+
+WORKDIR /build
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY conductor/requirements.txt .
+RUN pip install --prefix=/install --no-cache-dir -r requirements.txt
+
+# ── Stage 2: runtime ──────────────────────────────────────────────────────────
+FROM python:3.12-slim AS runtime
+
+RUN groupadd -r modus && useradd -r -g modus -d /app -s /sbin/nologin modus
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY --from=builder /install /usr/local
+
+COPY conductor/ ./conductor/
+COPY dashboard/ ./dashboard/
+
+RUN mkdir -p /app/data && chown -R modus:modus /app
+
+USER modus
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/app
+
+EXPOSE 8090
+
+HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:8090/health || exit 1
+
+CMD ["uvicorn", "conductor.main:app", \
+     "--host", "0.0.0.0", \
+     "--port", "8090", \
+     "--workers", "1", \
+     "--loop", "auto", \
+     "--no-access-log"]

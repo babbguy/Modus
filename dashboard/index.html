@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src *;">
+  <title>Modus — AI Cost Governance Platform</title>
+  <link rel="icon" type="image/svg+xml" href="/dashboard/favicon.svg">
+  <link rel="shortcut icon" type="image/svg+xml" href="/dashboard/favicon.svg">
+
+  <!-- Fonts (vendored — air-gap safe) -->
+  <link rel="stylesheet" href="/dashboard/fonts/fonts.css">
+
+  <!-- Vendor CSS (Gridstack removed — using CSS Grid) -->
+
+  <!-- Modus CSS -->
+  <link rel="stylesheet" href="/dashboard/fontawesome.min.css">
+  <link rel="stylesheet" href="/dashboard/modus-ds.css">
+  <link rel="stylesheet" href="/dashboard/css/dashboard.css">
+  <link rel="stylesheet" href="/dashboard/css/gridstack-tiles.css">
+
+  <!-- Vendor JS (loaded before app, no defer — Chart.js must be global) -->
+  <script src="/dashboard/vendor/chart.umd.min.js"></script>
+  <script src="/dashboard/modus-charts.js"></script>
+</head>
+<body>
+
+  <!-- ═══════════════════════════════════════════════════════════════════
+       LOGIN SCREEN — shown when no auth token is stored and auth_mode != stub
+       ═══════════════════════════════════════════════════════════════════ -->
+  <div id="login-screen" class="login-screen" style="display:none" role="dialog" aria-label="Sign in">
+    <div class="login-bg">
+      <div class="login-glow login-glow-1"></div>
+      <div class="login-glow login-glow-2"></div>
+    </div>
+    <div class="login-card">
+      <div class="login-header">
+        <svg class="login-logo" viewBox="0 0 132 20" xmlns="http://www.w3.org/2000/svg" style="width:180px;height:auto">
+          <g fill="#e0e0e0">
+            <path d="M28.86,10C28.86,4.74,24.5.47,19.14.47s-9.72,4.28-9.72,9.53,4.36,9.53,9.72,9.53,9.72-4.28,9.72-9.53ZM19.14,16.98c-3.93,0-7.12-3.13-7.12-6.98s3.19-6.98,7.12-6.98,7.12,3.13,7.12,6.98-3.19,6.98-7.12,6.98Z"/>
+            <path d="M7.5,10c0-4.01,2.12-7.53,5.31-9.57-2.55.78-4.74,1.96-6.54,3.24-.98,1.91-1.53,4.06-1.53,6.33s.55,4.43,1.53,6.33c1.8,1.27,3.98,2.46,6.54,3.24-3.2-2.04-5.31-5.56-5.31-9.57Z"/>
+            <path d="M30.78,10c0,4.01-2.12,7.53-5.31,9.57,2.55-.78,4.74-1.96,6.54-3.24.98-1.91,1.53-4.06,1.53-6.33s-.55-4.43-1.53-6.33c-1.8-1.27-3.98-2.46-6.54-3.24,3.2,2.04,5.31,5.56,5.31,9.57Z"/>
+            <path d="M38.28,10s-1.3-2.08-3.86-4.39c.42,1.39.64,2.87.64,4.39s-.22,3-.64,4.39c2.55-2.31,3.86-4.39,3.86-4.39Z"/>
+            <path d="M3.22,10c0-1.52.22-3,.64-4.39C1.3,7.92,0,10,0,10c0,0,1.3,2.08,3.86,4.39-.42-1.39-.64-2.87-.64-4.39Z"/>
+            <path d="M24.37,9.98c0-2.96-2.34-5.36-5.23-5.36s-5.23,2.4-5.23,5.36c0,2.3,1.42,4.26,3.4,5.02-.35-.43-.56-.98-.56-1.58,0-1.35,1.07-2.45,2.39-2.45s2.39,1.1,2.39,2.45c0,.6-.21,1.15-.56,1.58,1.99-.76,3.4-2.72,3.4-5.02Z"/>
+          </g>
+          <text x="49.65" y="16.49" fill="#e0e0e0" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="18" font-weight="600" letter-spacing="2.4">MODUS</text>
+        </svg>
+        <div class="login-subtitle">AI Cost Governance Platform</div>
+      </div>
+
+      <form class="login-form" id="login-form" autocomplete="off">
+        <div class="login-field">
+          <label for="login-token">Master key or JWT</label>
+          <input type="password" id="login-token" class="login-input" placeholder="mds_master_... or JWT token" required autocomplete="off">
+        </div>
+        <button type="submit" class="login-btn" id="login-btn">
+          <span id="login-btn-text">Authenticate</span>
+          <span id="login-btn-spinner" class="login-spinner" style="display:none"></span>
+        </button>
+        <div class="login-error" id="login-error" role="alert"></div>
+      </form>
+
+      <div class="login-divider"><span>or</span></div>
+
+      <button type="button" class="login-master-btn" id="login-master-btn">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        Use Master API Key
+      </button>
+      <div class="login-master-hint">For standalone deployments using MODUS_MASTER_API_KEY</div>
+
+      <div class="login-footer">
+        <svg viewBox="0 0 200 42" xmlns="http://www.w3.org/2000/svg" style="width:120px;height:auto;opacity:0.5">
+          <g fill="#e0e0e0">
+            <path d="M105.19,18.69c2.38-1.42,6.73-.03,9.37,1.93-.92-4.79-5.57-7.57-10.11-8.22,2.84-1.83,6.27-2.63,9.65-2.62-6.44-5-16.77-1.47-17.55-1.1-.1-1.81-.41-3.57-1.15-5.23-.48-1.07-1.2-2.22-2.2-2.85-1.66,3.93-4.24,7.4-7.49,10.15l1.47.37c-.87.57-1.78,1.09-2.64,1.68-1.84,1.27-3.76,2.83-5.22,4.52-.21.24-1.27,1.55-1.31,1.73-.07.31.23,1.27.14,1.88-.25,1.84-4.02,4.96-5.35,6.5-.44.5-.87,1.04-1.28,1.57-.18.24-1.11,1.45-1.14,1.61-.03.14.12.3.21.4.69.71,2.58,1.95,3.52,2.27.64.22,1.65.46,2.15.51.29.03,1.82-.52,2.06-.33.74.58,1.64.92,2.53,1.16,1.4-1.18,1.66-1.27,3.42-1.86,2.03-.68,4.5-.92,6.29.46.06-.74-.14-1.51-.64-2.07,0-.2,1.04-.15,1.24-.14,2.03.14,4.37,1.24,5.45,3,.11.19.53,1.22.61,1.22,1.25-1.74.74-4.1-.51-5.69,1.91.23,8.52,1.49,5.15,11.87,5.82-1.94,13.36-15.55,3.31-22.71ZM82.65,22.85c-.54.28-1.31.26-1.9.26.15-1.92,2.32-2.61,3.67-3.58-.22.86-.98,2.92-1.77,3.33Z"/>
+            <g>
+              <path d="M0,5.16h8.08c5.62,0,8.6,3.07,8.6,9.57v12.55c0,6.5-2.98,9.57-8.6,9.57H0V5.16ZM5.44,32.37h1.89c2.9,0,3.91-1.1,3.91-4.43v-13.87c0-3.34-1.01-4.43-3.91-4.43h-1.89v22.73Z"/>
+              <path d="M20.5,36.84V5.16h5.44v31.69h-5.44Z"/>
+              <path d="M35.2,36.84h-5.44V5.16h7.64c6.1,0,9.22,2.59,9.22,9.35,0,5.09-1.97,7.15-3.82,7.99l4.61,14.35h-5.53l-3.86-13.12c-.7.09-1.84.13-2.81.13v12.99ZM35.2,19.38h1.93c2.94,0,4.04-1.1,4.04-4.87s-1.1-4.87-4.04-4.87h-1.93v9.74Z"/>
+              <path d="M49.5,36.84V5.16h14.57v4.74h-9.13v8.16h7.02v4.74h-7.02v9.3h9.74v4.74h-15.18Z"/>
+            </g>
+            <g>
+              <path d="M132.55,4.94h4.48l3.69,20.19h.09l3.03-20.19h5.09l-5.57,31.69h-4.56l-3.95-20.93h-.09l-3.69,20.93h-4.56l-6.01-31.69h5.09l3.34,20.19h.09l3.55-20.19Z"/>
+              <path d="M150.19,4.94h5.44v23.92c0,2.33.92,3.47,2.9,3.47s2.9-1.14,2.9-3.47V4.94h5.44v23.7c0,5.44-3.16,8.43-8.34,8.43s-8.34-2.98-8.34-8.43V4.94Z"/>
+              <path d="M169.67,36.62V4.94h5.44v26.95h8.56v4.74h-14Z"/>
+              <path d="M184.82,36.62V4.94h15.18v4.74h-9.74v8.16h7.29v4.74h-7.29v14.04h-5.44Z"/>
+            </g>
+          </g>
+        </svg>
+      </div>
+    </div>
+  </div>
+
+  <style>
+    /* ── LOGIN SCREEN ──────────────────────────────────────────────── */
+    .login-screen {
+      position: fixed; inset: 0; z-index: 10000;
+      display: flex; align-items: center; justify-content: center;
+      background: #181818;
+      font-family: var(--sans);
+    }
+    .login-bg {
+      position: absolute; inset: 0; overflow: hidden;
+    }
+    .login-glow {
+      position: absolute; border-radius: 50%;
+      filter: blur(100px); opacity: 0.15;
+    }
+    .login-glow-1 {
+      width: 600px; height: 600px; top: -200px; right: -100px;
+      background: #005C53;
+      animation: loginFloat 8s ease-in-out infinite;
+    }
+    .login-glow-2 {
+      width: 400px; height: 400px; bottom: -100px; left: -50px;
+      background: #9FC131;
+      animation: loginFloat 10s ease-in-out infinite reverse;
+    }
+    @keyframes loginFloat {
+      0%, 100% { transform: translate(0, 0); }
+      50% { transform: translate(30px, -30px); }
+    }
+    .login-card {
+      position: relative; z-index: 1;
+      background: #212121; border: 1px solid #2c2c2c;
+      border-radius: 16px; padding: 40px 36px;
+      width: 420px; max-width: 95vw;
+      box-shadow: 0 24px 64px rgba(0,0,0,0.5);
+    }
+    .login-header {
+      text-align: center; margin-bottom: 32px;
+    }
+    .login-logo {
+      margin-bottom: 12px;
+    }
+    .login-subtitle {
+      font-size: 12px; color: #919191; margin-top: 8px;
+    }
+    .login-form { display: flex; flex-direction: column; gap: 16px; }
+    .login-field { display: flex; flex-direction: column; gap: 6px; }
+    .login-field label {
+      font-size: 11px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.5px; color: #919191;
+    }
+    .login-input {
+      width: 100%; padding: 11px 14px; background: #181818;
+      border: 1px solid #2c2c2c; border-radius: 8px;
+      color: #e0e0e0; font-family: var(--sans); font-size: 13px;
+      outline: none; transition: border-color 0.2s, box-shadow 0.2s;
+      box-sizing: border-box;
+    }
+    .login-input:focus {
+      border-color: #9FC131;
+      box-shadow: 0 0 0 3px rgba(159,193,49,0.15);
+    }
+    .login-input::placeholder { color: #555; }
+    .login-btn {
+      width: 100%; padding: 12px; border: none; border-radius: 8px;
+      background: #9FC131; color: #181818;
+      font-family: var(--sans); font-size: 14px; font-weight: 600;
+      cursor: pointer; transition: all 0.2s;
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+    }
+    .login-btn:hover { background: #b5d440; transform: translateY(-1px); }
+    .login-btn:active { transform: translateY(0); }
+    .login-spinner {
+      width: 16px; height: 16px; border: 2px solid rgba(24,24,24,0.3);
+      border-top-color: #181818; border-radius: 50%;
+      animation: loginSpin 0.6s linear infinite;
+    }
+    @keyframes loginSpin {
+      to { transform: rotate(360deg); }
+    }
+    .login-error {
+      font-size: 12px; color: #ef4444; text-align: center;
+      min-height: 18px; transition: opacity 0.2s;
+    }
+    .login-divider {
+      display: flex; align-items: center; gap: 12px; margin: 20px 0;
+      font-size: 11px; color: #555;
+    }
+    .login-divider::before, .login-divider::after {
+      content: ''; flex: 1; height: 1px; background: #2c2c2c;
+    }
+    .login-master-btn {
+      width: 100%; padding: 10px 12px;
+      border: 1px solid #2c2c2c; border-radius: 8px;
+      background: transparent; color: #e0e0e0;
+      font-family: var(--sans); font-size: 13px; font-weight: 500;
+      cursor: pointer; transition: all 0.15s;
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+    }
+    .login-master-btn:hover {
+      border-color: #3a3a3a; background: rgba(255,255,255,0.03);
+      transform: translateY(-1px);
+    }
+    .login-master-hint {
+      text-align: center; font-size: 11px; color: #555; margin-top: 8px;
+    }
+    .login-footer {
+      text-align: center; margin-top: 24px; font-size: 11px; color: #555;
+    }
+
+    /* Light mode login overrides */
+    html[data-theme="light"] .login-screen { background: #f4f5f7; }
+    html[data-theme="light"] .login-card { background: #fff; border-color: #dfe1e6; box-shadow: 0 24px 64px rgba(0,0,0,0.12); }
+    html[data-theme="light"] .login-input { background: #f4f5f7; border-color: #dfe1e6; color: #1a1a1a; }
+    html[data-theme="light"] .login-input::placeholder { color: #999; }
+    html[data-theme="light"] .login-field label { color: #5e6068; }
+    html[data-theme="light"] .login-subtitle { color: #5e6068; }
+    html[data-theme="light"] .login-master-btn { border-color: #dfe1e6; color: #1a1a1a; }
+    html[data-theme="light"] .login-master-hint { color: #999; }
+  </style>
+
+  <!-- Login gate: sign-in with a JWT or the master key (see js/login-gate.js) -->
+  <script src="/dashboard/js/login-gate.js"></script>
+
+  <!-- MOBILE SIDEBAR OVERLAY -->
+  <div class="mobile-overlay" id="mobile-overlay"></div>
+
+  <!-- OFFLINE BANNER -->
+  <div class="offline-banner" id="offline-banner" role="alert">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="1" y1="1" x2="23" y2="23"/><path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55"/><path d="M5 12.55a10.94 10.94 0 0 1 5.17-2.39"/><path d="M10.71 5.05A16 16 0 0 1 22.56 9"/><path d="M1.42 9a15.91 15.91 0 0 1 4.7-2.88"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>
+    You are offline — dashboard data may be stale
+  </div>
+
+  <!-- ERROR BANNER -->
+  <div class="error-banner" id="error-banner" role="alert">
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+    <span id="error-banner-msg">Some data failed to load — click to dismiss</span>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <!-- SIDEBAR                                                            -->
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <div class="sidebar" id="sidebar">
+    <button class="sidebar-collapse-tab" id="sidebar-collapse-btn" title="Collapse sidebar">
+      <span id="sidebar-collapse-icon">&#8249;</span>
+    </button>
+    <div class="sidebar-inner">
+      <div class="sidebar-brand">
+        <!-- Wide logo (expanded sidebar) -->
+        <svg class="sidebar-brand-logo sidebar-brand-wide" viewBox="0 0 132 20" xmlns="http://www.w3.org/2000/svg">
+          <g fill="currentColor">
+            <path d="M28.86,10C28.86,4.74,24.5.47,19.14.47s-9.72,4.28-9.72,9.53,4.36,9.53,9.72,9.53,9.72-4.28,9.72-9.53ZM19.14,16.98c-3.93,0-7.12-3.13-7.12-6.98s3.19-6.98,7.12-6.98,7.12,3.13,7.12,6.98-3.19,6.98-7.12,6.98Z"/>
+            <path d="M7.5,10c0-4.01,2.12-7.53,5.31-9.57-2.55.78-4.74,1.96-6.54,3.24-.98,1.91-1.53,4.06-1.53,6.33s.55,4.43,1.53,6.33c1.8,1.27,3.98,2.46,6.54,3.24-3.2-2.04-5.31-5.56-5.31-9.57Z"/>
+            <path d="M30.78,10c0,4.01-2.12,7.53-5.31,9.57,2.55-.78,4.74-1.96,6.54-3.24.98-1.91,1.53-4.06,1.53-6.33s-.55-4.43-1.53-6.33c-1.8-1.27-3.98-2.46-6.54-3.24,3.2,2.04,5.31,5.56,5.31,9.57Z"/>
+            <path d="M38.28,10s-1.3-2.08-3.86-4.39c.42,1.39.64,2.87.64,4.39s-.22,3-.64,4.39c2.55-2.31,3.86-4.39,3.86-4.39Z"/>
+            <path d="M3.22,10c0-1.52.22-3,.64-4.39C1.3,7.92,0,10,0,10c0,0,1.3,2.08,3.86,4.39-.42-1.39-.64-2.87-.64-4.39Z"/>
+            <path d="M24.37,9.98c0-2.96-2.34-5.36-5.23-5.36s-5.23,2.4-5.23,5.36c0,2.3,1.42,4.26,3.4,5.02-.35-.43-.56-.98-.56-1.58,0-1.35,1.07-2.45,2.39-2.45s2.39,1.1,2.39,2.45c0,.6-.21,1.15-.56,1.58,1.99-.76,3.4-2.72,3.4-5.02Z"/>
+          </g>
+          <text x="49.65" y="16.49" fill="currentColor" font-family="Inter, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="18" font-weight="600" letter-spacing="2.4">MODUS</text>
+        </svg>
+        <!-- Icon only (collapsed sidebar) -->
+        <svg class="sidebar-brand-logo sidebar-brand-icon" viewBox="0 0 30 15" xmlns="http://www.w3.org/2000/svg" style="display:none">
+          <g fill="currentColor">
+            <path d="M22.62,7.5C22.62,3.38,19.2.03,15,.03s-7.62,3.35-7.62,7.47,3.42,7.47,7.62,7.47,7.62-3.35,7.62-7.47ZM15,12.97c-3.08,0-5.58-2.45-5.58-5.47s2.5-5.47,5.58-5.47,5.58,2.45,5.58,5.47-2.5,5.47-5.58,5.47Z"/>
+            <path d="M5.88,7.5C5.88,4.36,7.54,1.6,10.04,0c-2,.61-3.71,1.54-5.12,2.54-.77,1.49-1.2,3.18-1.2,4.96s.43,3.47,1.2,4.96c1.41,1,3.12,1.93,5.12,2.54-2.5-1.6-4.16-4.36-4.16-7.5Z"/>
+            <path d="M24.12,7.5c0,3.14-1.66,5.9-4.16,7.5,2-.61,3.71-1.54,5.12-2.54.77-1.49,1.2-3.18,1.2-4.96s-.43-3.47-1.2-4.96c-1.41-1-3.12-1.93-5.12-2.54,2.5,1.6,4.16,4.36,4.16,7.5Z"/>
+            <path d="M30,7.5s-1.02-1.63-3.02-3.44c.33,1.09.5,2.25.5,3.44s-.18,2.35-.5,3.44c2-1.81,3.02-3.44,3.02-3.44Z"/>
+            <path d="M2.52,7.5c0-1.19.18-2.35.5-3.44C1.02,5.87,0,7.5,0,7.5c0,0,1.02,1.63,3.02,3.44-.33-1.09-.5-2.25-.5-3.44Z"/>
+            <path d="M19.1,7.49c0-2.32-1.84-4.2-4.1-4.2s-4.1,1.88-4.1,4.2c0,1.8,1.11,3.34,2.67,3.94-.27-.33-.44-.76-.44-1.24,0-1.06.84-1.92,1.87-1.92s1.87.86,1.87,1.92c0,.47-.17.9-.44,1.24,1.56-.6,2.67-2.13,2.67-3.94Z"/>
+          </g>
+        </svg>
+      </div>
+      <nav class="sidebar-nav">
+        <div class="sidebar-item active" data-view="overview">
+          <span class="sidebar-icon"><i class="fa-solid fa-gauge-high"></i></span> <span class="sidebar-item-label">Overview</span>
+        </div>
+        <div class="sidebar-item" data-view="apps">
+          <span class="sidebar-icon"><i class="fa-solid fa-cubes"></i></span> <span class="sidebar-item-label">Applications</span>
+        </div>
+        <div class="sidebar-item" data-view="alerts">
+          <span class="sidebar-icon"><i class="fa-solid fa-bell"></i></span> <span class="sidebar-item-label">Alerts & Rules</span>
+        </div>
+        <div class="sidebar-item" data-view="pricing">
+          <span class="sidebar-icon"><i class="fa-solid fa-dollar-sign"></i></span> <span class="sidebar-item-label">Pricing</span>
+        </div>
+        <div class="sidebar-item" data-view="notifications">
+          <span class="sidebar-icon"><i class="fa-regular fa-bell"></i></span> <span class="sidebar-item-label">Notifications</span>
+        </div>
+        <div class="sidebar-item" data-view="settings">
+          <span class="sidebar-icon"><i class="fa-solid fa-gear"></i></span> <span class="sidebar-item-label">Settings</span>
+        </div>
+        <div class="sidebar-item" data-view="connections">
+          <span class="sidebar-icon"><i class="fa-solid fa-plug"></i></span> <span class="sidebar-item-label">Connections</span>
+        </div>
+        <div class="sidebar-item" data-view="topology">
+          <span class="sidebar-icon"><i class="fa-solid fa-diagram-project"></i></span> <span class="sidebar-item-label">Topology</span>
+        </div>
+        <div class="sidebar-item" data-view="sessions">
+          <span class="sidebar-icon"><i class="fa-solid fa-stream"></i></span> <span class="sidebar-item-label">Sessions</span>
+        </div>
+        <div class="sidebar-item" data-view="help">
+          <span class="sidebar-icon"><i class="fa-solid fa-circle-question"></i></span> <span class="sidebar-item-label">Help</span>
+        </div>
+        <div style="border-top:1px solid var(--border);margin:8px 12px"></div>
+        <div class="sidebar-item" data-view="devops">
+          <span class="sidebar-icon"><i class="fa-solid fa-terminal"></i></span> <span class="sidebar-item-label">DevOps</span>
+        </div>
+        <div class="sidebar-item" data-view="executive">
+          <span class="sidebar-icon"><i class="fa-solid fa-chart-line"></i></span> <span class="sidebar-item-label">Executive</span>
+        </div>
+        <div class="sidebar-item" data-view="finance">
+          <span class="sidebar-icon"><i class="fa-solid fa-coins"></i></span> <span class="sidebar-item-label">Finance</span>
+        </div>
+        <div class="sidebar-item" data-view="routing">
+          <span class="sidebar-icon"><i class="fa-solid fa-route"></i></span> <span class="sidebar-item-label">Routing</span>
+        </div>
+        <div style="border-top:1px solid var(--border);margin:8px 12px"></div>
+        <div class="sidebar-item" data-view="policies">
+          <span class="sidebar-icon"><i class="fa-solid fa-scroll"></i></span> <span class="sidebar-item-label">Policies</span>
+        </div>
+        <div class="sidebar-item" data-view="teams">
+          <span class="sidebar-icon"><i class="fa-solid fa-users"></i></span> <span class="sidebar-item-label">Teams</span>
+        </div>
+        <div style="border-top:1px solid var(--border);margin:8px 12px"></div>
+        <div class="sidebar-item" data-view="governance">
+          <span class="sidebar-icon"><i class="fa-solid fa-scale-balanced"></i></span> <span class="sidebar-item-label">Governance</span>
+        </div>
+        <div class="sidebar-item" data-view="compliance">
+          <span class="sidebar-icon"><i class="fa-solid fa-shield-halved"></i></span> <span class="sidebar-item-label">Compliance</span>
+        </div>
+        <div class="sidebar-item" data-view="federation">
+          <span class="sidebar-icon"><i class="fa-solid fa-network-wired"></i></span> <span class="sidebar-item-label">Federation</span>
+        </div>
+        <div class="sidebar-item" data-view="sentinel">
+          <span class="sidebar-icon"><i class="fa-solid fa-eye"></i></span> <span class="sidebar-item-label">Sentinel</span>
+        </div>
+        <div style="border-top:1px solid var(--border);margin:8px 12px"></div>
+        <div class="sidebar-item" data-view="admin" id="sidebar-admin-item">
+          <span class="sidebar-icon"><i class="fa-solid fa-user-gear"></i></span> <span class="sidebar-item-label">Admin</span>
+          <span class="ent-badge" style="margin-left:auto;background:rgba(239,68,68,0.2);color:var(--danger)">ADM</span>
+        </div>
+
+      </nav>
+      <div class="sidebar-footer">
+        <div class="sidebar-profile" id="sidebar-profile" title="User Profile" data-view="profile">
+          <div class="sidebar-profile-avatar" id="sidebar-profile-avatar">U</div>
+          <div class="sidebar-profile-info">
+            <div class="sidebar-profile-name" id="sidebar-profile-name">User</div>
+            <div class="sidebar-profile-role" id="sidebar-profile-role">Admin</div>
+          </div>
+        </div>
+        <div class="theme-toggle-row" id="theme-toggle-row">
+          <span class="theme-toggle-icon"><i class="fa-solid fa-sun"></i></span>
+          <div class="theme-toggle-track" id="theme-toggle">
+            <div class="theme-toggle-thumb"></div>
+          </div>
+          <span class="theme-toggle-icon"><i class="fa-solid fa-moon"></i></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <!-- MAIN CONTENT AREA                                                  -->
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <div class="content-area" id="content-area">
+
+    <!-- TOPBAR -->
+    <div class="topbar" id="topbar">
+      <div class="topbar-left">
+        <button class="mobile-menu-btn" id="mobile-menu-btn">
+          <i class="fa-solid fa-bars"></i>
+        </button>
+        <div class="topbar-search">
+          <span class="topbar-search-icon"><i class="fa-solid fa-magnifying-glass"></i></span>
+          <input type="text" id="global-search" placeholder="Search apps, teams..." autocomplete="off">
+        </div>
+      </div>
+      <div class="topbar-center">
+        <!-- Period tabs (overview only) -->
+        <div class="period-tabs" id="period-tabs">
+          <button class="period-tab" data-days="1">1D</button>
+          <button class="period-tab active" data-days="7">7D</button>
+          <button class="period-tab" data-days="30">30D</button>
+          <button class="period-tab" data-days="90">90D</button>
+        </div>
+      </div>
+      <div class="topbar-right">
+        <button class="assistant-btn" id="assistant-btn" title="AI Assistant">
+          <svg viewBox="0 0 30 30" width="18" height="18" fill="currentColor" style="vertical-align:middle"><path d="M11.31,30c-.76-.27-.73-.97-1-1.6-.45-1.06-1.36-1.94-2.44-2.37-.6-.24-1.49-.27-1.48-1.16,0-.95,1.28-1.02,1.93-1.36.75-.39,1.46-1.09,1.85-1.85.35-.69.4-1.96,1.41-1.93.87.03.94,1.11,1.21,1.72.45,1,1.36,1.85,2.38,2.25.6.24,1.49.27,1.49,1.16s-.77.89-1.35,1.12c-1.31.52-2.15,1.36-2.67,2.67-.22.57-.18,1.13-.91,1.35h-.41Z"/><path d="M9.94.25c.32.29.5,1.39.68,1.87.95,2.52,2.98,4.58,5.52,5.5.5.18,1.61.36,1.9.74.33.43.21,1.14-.26,1.42-.35.21-1.14.32-1.57.48-2.48.87-4.61,2.96-5.54,5.42-.18.47-.33,1.4-.54,1.75-.36.62-1.32.62-1.68,0-.18-.31-.32-1.12-.46-1.53-.9-2.56-3.04-4.74-5.61-5.64-.78-.28-2.16-.29-2.02-1.44.1-.88,1.39-.95,2.08-1.2,2.5-.89,4.56-2.98,5.51-5.45.18-.48.37-1.61.67-1.9.35-.35.97-.34,1.33,0Z"/><path d="M23.31,9.62c.95-.05,1.01,1.02,1.24,1.66.61,1.67,1.96,2.92,3.62,3.53.61.23,1.46.21,1.48,1.1.02,1.02-1.01,1-1.72,1.28-1.42.55-2.64,1.74-3.26,3.13-.35.78-.4,2.28-1.63,1.91-.67-.2-.7-1.04-.91-1.61-.56-1.49-1.78-2.77-3.25-3.38-.65-.27-1.77-.3-1.84-1.15-.1-1.12,1.02-1.09,1.78-1.39,1.59-.64,2.78-1.95,3.37-3.55.22-.61.24-1.47,1.11-1.52Z"/></svg>
+        </button>
+        <span id="status-indicator" style="display:flex;align-items:center;gap:8px">
+          <span class="status-dot online"></span>
+          <span class="status-label">Connected</span>
+          <span class="status-time"></span>
+        </span>
+      </div>
+    </div>
+
+    <!-- VIEW CONTAINER (views render here via router) -->
+    <div id="view-container" class="view-container"></div>
+
+    <!-- FOOTER -->
+    <footer class="dashboard-footer">
+      <div class="footer-left">
+        <span class="footer-brand">MODUS</span>
+        <span class="footer-sep">&middot;</span>
+        <span class="footer-version">Modus v1.0.0</span>
+      </div>
+      <div class="footer-right">
+        AI Cost Governance Platform
+      </div>
+    </footer>
+
+  </div>
+
+  <!-- App entry point -->
+  <script type="module">
+    import { init } from '/dashboard/js/app.js';
+    init();
+  </script>
+
+</body>
+</html>

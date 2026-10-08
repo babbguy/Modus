@@ -1,0 +1,46 @@
+Modus has been deployed successfully.
+
+VERSION: {{ .Chart.AppVersion }}
+NAMESPACE: {{ .Release.Namespace }}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ORCHESTRATOR
+  Internal URL: http://{{ include "modus.fullname" . }}-orchestrator.{{ .Release.Namespace }}.svc.cluster.local:8080
+  Health check: kubectl exec -n {{ .Release.Namespace }} deploy/{{ include "modus.fullname" . }}-orchestrator -- curl -s http://localhost:8080/health
+
+{{- if .Values.orchestrator.ingress.enabled }}
+{{- range .Values.orchestrator.ingress.hosts }}
+  Public URL: https://{{ .host }}
+{{- end }}
+{{- else }}
+  No ingress configured. Access via port-forward:
+  kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "modus.fullname" . }}-orchestrator 8080:8080
+{{- end }}
+
+The orchestrator serves the dashboard at the same address (port 8080).
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+NEXT STEPS
+
+1. Verify the database migration ran (the "migrate" init container):
+   kubectl logs -n {{ .Release.Namespace }} deploy/{{ include "modus.fullname" . }}-orchestrator -c migrate
+
+2. Create a team and issue its registration token. The master key (from the
+   {{ if .Values.secrets.create }}{{ include "modus.secretName" . }}{{ else }}{{ .Values.auth.existingSecret }}{{ end }} secret) authenticates admin calls in either auth mode,
+   sent as the X-Modus-APIKey header. Treat it like a root password:
+   curl -X POST http://ORCHESTRATOR_URL/api/v1/teams      -H "X-Modus-APIKey: YOUR_MASTER_KEY" -H "Content-Type: application/json"      -d '{"slug": "my-team", "name": "My Team"}'
+   curl -X POST http://ORCHESTRATOR_URL/api/v1/teams/TEAM_ID/registration-token      -H "X-Modus-APIKey: YOUR_MASTER_KEY"
+{{- if eq .Values.orchestrator.config.authMode "jwt" }}
+   The dashboard sign-in accepts either that master key or a JWT signed with the
+   secret in {{ if .Values.secrets.create }}{{ include "modus.secretName" . }}{{ else }}{{ .Values.auth.jwt.existingSecret }}{{ end }} (MODUS_JWT_SECRET).
+{{- end }}
+
+3. Instrument an application with the Python SDK, then set MODUS_URL and
+   MODUS_TEAM_TOKEN in its environment:
+   pip install "modus-agent @ git+https://github.com/babbguy/Modus.git#subdirectory=sdk"
+   and make `import modus` the first import of the application.
+
+Documentation: https://github.com/babbguy/Modus/tree/main/docs
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

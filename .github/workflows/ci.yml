@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ruff==0.8.0
+      - name: Ruff check (must pass with zero violations)
+        run: ruff check orchestrator/ sdk/ tests/
+
+  dashboard:
+    name: Dashboard JavaScript
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Every dashboard module parses as an ES module
+        run: |
+          status=0
+          for f in $(git ls-files 'dashboard/*.js' 'dashboard/**/*.js'); do
+            node --input-type=module --check < "$f" || { echo "::error file=$f::does not parse as an ES module"; status=1; }
+          done
+          exit $status
+
+  typecheck:
+    name: Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r orchestrator/requirements.txt -r requirements-dev.txt
+      - run: mypy orchestrator/ sdk/ || echo "::warning::mypy found type errors (non-blocking)"
+
+  migrations:
+    name: PostgreSQL migrations
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: modus
+          POSTGRES_USER: modus
+          POSTGRES_PASSWORD: modus
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U modus"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      MODUS_DATABASE_URL: postgresql+asyncpg://modus:modus@localhost:5432/modus
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r orchestrator/requirements.txt
+      - name: Apply migrations to an empty database
+        run: alembic upgrade heads
+      - name: Schema must match the ORM models
+        run: python scripts/check_migrations.py
+      - name: Migrations must downgrade cleanly
+        run: alembic downgrade base
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    env:
+      MODUS_DATABASE_URL: "sqlite+aiosqlite:///:memory:"
+      MODUS_AUTH_MODE: stub
+      MODUS_ENVIRONMENT: development
+      MODUS_METRICS_ENABLED: "false"
+      MODUS_MASTER_API_KEY: mds_master_ci_test_key_placeholder_000
+      MODUS_SECRET_KEY: test-secret-key-for-ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r orchestrator/requirements.txt -r requirements-dev.txt
+      - name: Run tests (must exit 0 — zero failures allowed)
+        run: >
+          pytest tests/ -v --tb=short -x --strict-markers
+          --cov=orchestrator --cov=sdk/modus
+          --cov-report=term-missing
+          --cov-report=xml:coverage.xml
+          --cov-fail-under=70
+      - name: Verify clean exit
+        run: echo "All tests passed with exit code 0"
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml
+          retention-days: 30

@@ -1,0 +1,39 @@
+# Example: How an application repo calls the Modus registration workflow.
+#
+# Place this file at: .github/workflows/modus.yml
+# in your APPLICATION repository (not the shared-workflows repo).
+#
+# Prerequisites:
+#   1. MODUS_ORCHESTRATOR_URL in your org or repo secrets
+#   2. MODUS_MASTER_KEY in your org or repo secrets
+#   3. WORKFLOW_GITHUB_TOKEN — a PAT with secrets:write on this repo
+#      (The default GITHUB_TOKEN cannot write secrets to itself)
+#
+# After the first run:
+#   MODUS_API_KEY, MODUS_ORCHESTRATOR_URL and MODUS_APP_ID will be written to
+#   this repo's secrets.
+#   Make `import modus` the first import of your app, set MODUS_URL and a team
+#   registration token (or use the per-app key), and deploy.
+
+name: Modus Registration
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/modus.yml'  # re-run if this file changes
+  workflow_dispatch:                           # allow manual re-registration
+
+jobs:
+  register:
+    name: Register with Modus
+    uses: babbguy/Modus/.github/workflows/modus-register.yml@main
+    with:
+      app-id: your-app-name        # change this — must be unique within your team
+      team-slug: your-team         # change this — created on first registration if it does not exist
+      environment: production      # production | staging | dev
+      # app-name defaults to the repository name if not set
+    secrets:
+      orchestrator-url: ${{ secrets.MODUS_ORCHESTRATOR_URL }}
+      master-key: ${{ secrets.MODUS_MASTER_KEY }}
+      github-token: ${{ secrets.WORKFLOW_GITHUB_TOKEN }}

@@ -1,0 +1,59 @@
+# Modus Federator — Docker Compose
+# Self-hosted deployment.
+#
+# Prerequisites:
+#   1. TLS cert via Let's Encrypt (certbot)
+#   2. .env file with FEDERATOR_JWT_SECRET
+#
+# Usage:
+#   docker compose up -d
+#   docker compose logs -f federator
+
+services:
+  federator:
+    build: .
+    container_name: modus-federator
+    restart: always
+    ports:
+      - "8443:8443"
+    environment:
+      - FEDERATOR_DATABASE_URL=sqlite+aiosqlite:////data/federator.db
+      - FEDERATOR_ENVIRONMENT=production
+      - FEDERATOR_DEBUG=false
+      - FEDERATOR_JWT_SECRET=${FEDERATOR_JWT_SECRET}
+      - FEDERATOR_JWT_ISSUER=${FEDERATOR_JWT_ISSUER:-modus-orchestrator}
+      - FEDERATOR_JWT_AUDIENCE=${FEDERATOR_JWT_AUDIENCE:-modus-federator}
+      - FEDERATOR_AGGREGATION_INTERVAL_MINUTES=${FEDERATOR_AGGREGATION_INTERVAL_MINUTES:-60}
+      - FEDERATOR_MIN_CONTRIBUTORS_FOR_RESULT=${FEDERATOR_MIN_CONTRIBUTORS_FOR_RESULT:-3}
+    volumes:
+      - federator-data:/data
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Optional: Caddy reverse proxy for TLS termination
+  caddy:
+    image: caddy:2-alpine
+    container_name: modus-caddy
+    restart: always
+    ports:
+      - "443:443"
+      - "80:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - federator
+
+volumes:
+  federator-data:
+  caddy-data:
+  caddy-config:

@@ -1,0 +1,20 @@
+{{- if .Values.orchestrator.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "modus.fullname" . }}-config
+  labels:
+    {{- include "modus.labels" . | nindent 4 }}
+data:
+  MODUS_ENVIRONMENT: {{ .Values.orchestrator.config.environment | quote }}
+  MODUS_LOG_LEVEL: {{ .Values.orchestrator.config.logLevel | quote }}
+  MODUS_LOG_FORMAT: {{ .Values.orchestrator.config.logFormat | quote }}
+  MODUS_AUTH_MODE: {{ .Values.orchestrator.config.authMode | quote }}
+  MODUS_METRICS_ENABLED: {{ .Values.orchestrator.config.metricsEnabled | quote }}
+  MODUS_MAX_BATCH_SIZE: {{ .Values.orchestrator.config.maxBatchSize | quote }}
+  MODUS_AGGREGATE_INTERVAL_SECONDS: {{ .Values.orchestrator.config.aggregateIntervalSeconds | quote }}
+  MODUS_HEARTBEAT_STALE_MINUTES: {{ .Values.orchestrator.config.heartbeatStaleMinutes | quote }}
+  MODUS_CORS_ORIGINS: {{ .Values.orchestrator.config.corsOrigins | quote }}
+  MODUS_DB_POOL_SIZE: {{ .Values.database.poolSize | quote }}
+  MODUS_DB_MAX_OVERFLOW: {{ .Values.database.maxOverflow | quote }}
+{{- end }}

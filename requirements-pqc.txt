@@ -1,0 +1,13 @@
+# Optional post-quantum cryptography extra.
+#
+# Installing this enables REAL NIST FIPS-204 ML-DSA-65 signatures for audit
+# attestations (publicly verifiable, quantum-resistant). Without it, Modus
+# uses an HMAC-SHA-512 integrity commitment — honestly reported as a symmetric
+# MAC, never advertised as a signature.
+#
+#   pip install -r orchestrator/requirements.txt -r requirements-pqc.txt
+#
+# pqcrypto ships C extensions (needs a build toolchain), which is why it is an
+# opt-in extra rather than a base dependency — the base install stays lean and
+# supply-chain-clean.
+pqcrypto>=0.4.0

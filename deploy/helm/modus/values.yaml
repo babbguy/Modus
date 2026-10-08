@@ -1,0 +1,192 @@
+# Modus Helm Chart — Values
+# ===================================
+# All configurable parameters with documentation.
+# Override in your environment-specific values file:
+#   helm install modus ./helm/modus -f values.production.yaml
+
+# ── Global ─────────────────────────────────────────────────────────────────────
+global:
+  imageRegistry: ""           # Optional registry prefix, e.g. "registry.your-org.internal" -> registry.your-org.internal/<repository>:<tag>
+  imagePullSecrets: []        # [{name: regcred}] if registry requires auth
+  nameOverride: ""
+  fullnameOverride: ""
+
+# ── Orchestrator ───────────────────────────────────────────────────────────────
+orchestrator:
+  enabled: true
+
+  image:
+    repository: ghcr.io/babbguy/modus-orchestrator
+    tag: "1.0.0"              # Pin to specific version in production
+    pullPolicy: IfNotPresent
+
+  replicaCount: 2             # Run minimum 2 for HA. Scale out for throughput.
+
+  # Resource limits — tune based on actual usage
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 512Mi
+
+  # Horizontal Pod Autoscaler
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+
+  # Service
+  service:
+    type: ClusterIP
+    port: 8080
+
+  # Ingress — configure for your ingress controller
+  ingress:
+    enabled: false
+    className: "nginx"        # "nginx" | "traefik" | "alb" | "gce"
+    annotations: {}
+    # For cert-manager TLS:
+    #   kubernetes.io/ingress.class: nginx
+    #   cert-manager.io/cluster-issuer: letsencrypt-prod
+    hosts:
+      - host: modus-api.your-domain.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls: []
+    # - secretName: modus-api-tls
+    #   hosts: [modus-api.your-domain.com]
+
+  # Environment configuration
+  config:
+    environment: production
+    logLevel: INFO
+    logFormat: json
+    authMode: jwt             # "stub" | "jwt" — stub is dev-only; config rejects
+                              # authMode=stub whenever environment != development,
+                              # so the default must be jwt to boot out of the box.
+    metricsEnabled: true
+    maxBatchSize: 1000
+    aggregateIntervalSeconds: 60
+    heartbeatStaleMinutes: 5
+    corsOrigins: "http://localhost:3001"
+    # Update corsOrigins to the URL the dashboard is served from in production
+    jwtIssuer: ""             # Optional: MODUS_JWT_ISSUER (checked when set)
+    jwtAudience: "modus"      # MODUS_JWT_AUDIENCE (tokens must carry this "aud")
+
+  # Pod security
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    fsGroup: 1000
+
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: [ALL]
+
+  # Liveness and readiness probes
+  livenessProbe:
+    httpGet:
+      path: /health
+      port: 8080
+    initialDelaySeconds: 15
+    periodSeconds: 15
+    failureThreshold: 3
+
+  readinessProbe:
+    httpGet:
+      path: /ready
+      port: 8080
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    failureThreshold: 3
+
+  # Node selector, tolerations, affinity
+  nodeSelector: {}
+  tolerations: []
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/component
+                  operator: In
+                  values: [orchestrator]
+            topologyKey: kubernetes.io/hostname
+
+# ── Secrets ────────────────────────────────────────────────────────────────────
+# The orchestrator needs three secret values:
+#   database URL   -> MODUS_DATABASE_URL
+#   master key     -> MODUS_MASTER_API_KEY   (a root credential: treat it like a root password)
+#   JWT secret     -> MODUS_JWT_SECRET       (required when orchestrator.config.authMode=jwt)
+#
+# Recommended: create the Secrets yourself and reference them below.
+#   kubectl create secret generic modus-db         --from-literal=url="postgresql+asyncpg://user:pass@host:5432/modus"
+#   kubectl create secret generic modus-master-key --from-literal=key="mds_master_$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+#   kubectl create secret generic modus-jwt        --from-literal=secret="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+#
+# Alternative: let the chart create one Secret from values (secrets.create=true).
+# The values then live in your Helm release history, so prefer --set-file or an
+# encrypted values file over committing them.
+secrets:
+  create: false
+  databaseUrl: ""
+  masterApiKey: ""
+  jwtSecret: ""
+
+database:
+  # External managed database -- PostgreSQL 14 or newer
+  # (AWS RDS, GCP Cloud SQL, Azure Database for PostgreSQL, ...).
+  existingSecret: modus-db    # ignored when secrets.create=true
+  secretKey: url
+
+  # Connection pool settings
+  poolSize: 10
+  maxOverflow: 20
+  poolTimeout: 30
+  poolRecycle: 1800
+
+auth:
+  existingSecret: modus-master-key   # ignored when secrets.create=true
+  secretKey: key
+  jwt:
+    existingSecret: modus-jwt        # ignored when secrets.create=true
+    secretKey: secret                # a long random string, or a PEM public key for RS256
+
+# ── Prometheus ServiceMonitor ──────────────────────────────────────────────────
+serviceMonitor:
+  enabled: false            # Enable if you have prometheus-operator in your cluster
+  namespace: monitoring     # Namespace where Prometheus operator is deployed
+  interval: 30s
+  scrapeTimeout: 10s
+  labels: {}                # Labels to match your Prometheus serviceMonitorSelector
+
+# ── Network Policy ─────────────────────────────────────────────────────────────
+# Restricts INGRESS to the orchestrator pods (port 8080). Egress is not
+# restricted (the orchestrator must reach your database and DNS).
+networkPolicy:
+  enabled: false            # Needs a CNI that enforces NetworkPolicy
+  # NetworkPolicyPeer entries allowed to reach the orchestrator, for example
+  # your ingress controller, Prometheus, and the namespaces your instrumented
+  # applications run in:
+  #   allowedPeers:
+  #     - namespaceSelector:
+  #         matchLabels: {kubernetes.io/metadata.name: ingress-nginx}
+  #     - namespaceSelector:
+  #         matchLabels: {kubernetes.io/metadata.name: monitoring}
+  #     - namespaceSelector: {}        # any namespace in the cluster
+  # When empty, only pods in the release's own namespace may connect.
+  allowedPeers: []
+
+# ── Pod Disruption Budget ──────────────────────────────────────────────────────
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1           # Keep at least 1 replica during node drain

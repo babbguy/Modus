@@ -1,0 +1,49 @@
+# Modus Federator — Write Handler Service
+# =============================================
+# Activated by federator-writer.socket on demand.
+# Auto-stops after 120s idle (TimeoutStopSec + idle detection).
+#
+# RAM: ~40-60MB when active, 0 when idle.
+#
+# Install: sudo cp federator-writer.service /etc/systemd/system/
+# Logs:    journalctl -u federator-writer -f
+
+[Unit]
+Description=Modus Federator Write Handler
+Requires=federator-writer.socket
+After=network.target
+
+[Service]
+Type=notify
+User=federator
+Group=federator
+WorkingDirectory=/opt/federator
+Environment=FEDERATOR_DB_PATH=/data/federator.db
+Environment=FEDERATOR_JWT_SECRET=
+EnvironmentFile=-/opt/federator/.env
+
+ExecStart=/opt/federator/venv/bin/uvicorn \
+    federator.write_handler:app \
+    --fd 0 \
+    --workers 1 \
+    --timeout-keep-alive 30 \
+    --access-log \
+    --log-level warning
+
+# Auto-stop after 120s idle — saves RAM
+TimeoutStopSec=5
+WatchdogSec=300
+
+# Resource limits — lightweight
+MemoryMax=128M
+CPUQuota=50%
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/data
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

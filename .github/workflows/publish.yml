@@ -1,0 +1,169 @@
+# =============================================================================
+# Modus — Build & Publish Docker Images
+# =============================================================================
+# Triggers:
+#   - Version tags: v* (e.g., v1.2.0)
+#   - Manual run (workflow_dispatch)
+#
+# Publishes to GitHub Container Registry (ghcr.io):
+#   - ghcr.io/<owner>/modus-orchestrator:latest
+#   - ghcr.io/<owner>/modus-orchestrator:<version>
+#   - ghcr.io/<owner>/modus-conductor:latest
+#   - ghcr.io/<owner>/modus-conductor:<version>
+# =============================================================================
+
+name: Publish Modus Images
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g., 1.2.0)'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+
+  # ── Test ─────────────────────────────────────────────────────────────────
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: orchestrator/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          pip install -r orchestrator/requirements.txt
+          pip install pytest pytest-asyncio httpx aiosqlite
+
+      - name: Run tests
+        run: python -m pytest tests/ -v --tb=short
+
+  # ── Build & Push ─────────────────────────────────────────────────────────
+  build:
+    name: Build & Push
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - component: orchestrator
+            dockerfile: Dockerfile.orchestrator
+          - component: conductor
+            dockerfile: Dockerfile.conductor
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract version
+        id: version
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            VERSION="${{ github.ref_name }}"
+            VERSION="${VERSION#v}"
+            echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+          elif [[ -n "${{ inputs.version }}" ]]; then
+            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=latest" >> "$GITHUB_OUTPUT"
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generate image tags
+        id: tags
+        run: |
+          # Image names must be lowercase; the owner may not be.
+          OWNER="$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')"
+          IMAGE="ghcr.io/${OWNER}/modus-${{ matrix.component }}"
+          VERSION="${{ steps.version.outputs.version }}"
+          SHA="${{ github.sha }}"
+          SHORT_SHA="${SHA:0:7}"
+
+          TAGS="${IMAGE}:${SHORT_SHA}"
+          TAGS="${TAGS},${IMAGE}:latest"
+
+          if [[ "${{ steps.version.outputs.is_release }}" == "true" ]]; then
+            TAGS="${TAGS},${IMAGE}:${VERSION}"
+            if [[ "${VERSION}" =~ ^[0-9]+\.[0-9]+ ]]; then
+              MINOR="${BASH_REMATCH[0]}"
+              TAGS="${TAGS},${IMAGE}:${MINOR}"
+            fi
+          fi
+
+          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push ${{ matrix.component }}
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          cache-from: type=gha,scope=${{ matrix.component }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.component }}
+          labels: |
+            org.opencontainers.image.title=Modus ${{ matrix.component }}
+            org.opencontainers.image.description=AI cost governance — ${{ matrix.component }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+  # ── Verify Deployment Files ──────────────────────────────────────────────
+  verify-deploy:
+    name: Verify Deploy Package
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate compose file
+        run: docker compose -f deploy/docker-compose.prod.yml config --quiet
+
+      - name: Validate install script syntax
+        run: bash -n deploy/install.sh
+
+      - name: Validate upgrade script syntax
+        run: bash -n deploy/upgrade.sh
+
+      - name: Validate uninstall script syntax
+        run: bash -n deploy/uninstall.sh
+
+      - name: Check .env.example completeness
+        run: |
+          ENV_FILE="deploy/.env.example"
+          for KEY in MODUS_MODE MODUS_DATABASE_URL MODUS_PORT \
+                     MODUS_CONDUCTOR_PORT MODUS_MASTER_API_KEY \
+                     MODUS_LOG_LEVEL MODUS_VERSION; do
+            if ! grep -q "^${KEY}=" "${ENV_FILE}" && ! grep -q "^# ${KEY}=" "${ENV_FILE}"; then
+              echo "ERROR: Missing key ${KEY} in .env.example"
+              exit 1
+            fi
+          done
+          echo "All required keys present."

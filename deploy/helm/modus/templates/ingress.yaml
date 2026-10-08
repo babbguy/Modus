@@ -1,0 +1,36 @@
+{{- if and .Values.orchestrator.ingress.enabled .Values.orchestrator.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "modus.fullname" . }}-orchestrator
+  labels:
+    {{- include "modus.labels" . | nindent 4 }}
+  {{- with .Values.orchestrator.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.orchestrator.ingress.className }}
+  ingressClassName: {{ .Values.orchestrator.ingress.className }}
+  {{- end }}
+  {{- if .Values.orchestrator.ingress.tls }}
+  tls:
+    {{- toYaml .Values.orchestrator.ingress.tls | nindent 4 }}
+  {{- end }}
+  rules:
+    {{- range .Values.orchestrator.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range .paths }}
+          - path: {{ .path }}
+            pathType: {{ .pathType }}
+            backend:
+              service:
+                name: {{ include "modus.fullname" $ }}-orchestrator
+                port:
+                  number: {{ $.Values.orchestrator.service.port }}
+          {{- end }}
+    {{- end }}
+{{- end }}
