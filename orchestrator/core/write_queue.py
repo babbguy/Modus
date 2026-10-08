@@ -92,25 +92,6 @@ class AggregationItem:
     granularity: str           # "hourly" or "daily"
 
 
-@dataclass
-class RegistrationItem:
-    """App registration write-behind item.
-
-    The endpoint generates the key and validates uniqueness (reads).
-    The actual INSERT (app row + audit log) is batched here.
-    """
-    app_uuid: str        # pre-generated UUID for the app row
-    team_id: str
-    team_slug: str       # for auto-create if needed
-    app_id: str          # user-facing app identifier
-    app_name: str
-    environment: str
-    api_key_hash: str
-    api_key_prefix: str
-    actor_ip: Optional[str] = None
-    pending_key: Optional[str] = None  # "team_id:app_id" for cleanup after flush
-
-
 # ── Phase 9 write items ─────────────────────────────────────────────────────
 
 @dataclass
@@ -183,7 +164,7 @@ def queue_over_pressure() -> bool:
 async def enqueue(
     item: (
         IngestItem | HeartbeatItem | PolicyDecisionItem | AggregationItem
-        | RegistrationItem | PoELedgerItem | NeuroAssuranceItem
+        | PoELedgerItem | NeuroAssuranceItem
     ),
 ) -> bool:
     """
@@ -282,7 +263,6 @@ async def _flush_batch(items: list, _is_retry: bool = False) -> None:
     start = time.perf_counter()
     ingest_count = 0
     heartbeat_count = 0
-    registration_count = 0
     record_count = 0
 
     try:
@@ -477,27 +457,6 @@ async def _flush_batch(items: list, _is_retry: bool = False) -> None:
                         },
                     ))
 
-                elif isinstance(item, RegistrationItem):
-                    db.add(App(
-                        id=item.app_uuid,
-                        team_id=item.team_id,
-                        app_id=item.app_id,
-                        app_name=item.app_name,
-                        environment=item.environment,
-                        api_key_hash=item.api_key_hash,
-                        api_key_prefix=item.api_key_prefix,
-                    ))
-                    db.add(AuditLog(
-                        actor_id="master-key",
-                        actor_ip=item.actor_ip,
-                        team_id=item.team_id,
-                        resource_type="app",
-                        resource_id=item.app_uuid,
-                        action="registered",
-                        after={"app_id": item.app_id, "team": item.team_slug, "environment": item.environment},
-                    ))
-                    registration_count += 1
-
                 # ── Phase 9 items ────────────────────────────────────
                 elif isinstance(item, PoELedgerItem):
                     from orchestrator.db.models import PoELedgerEntry
@@ -533,36 +492,14 @@ async def _flush_batch(items: list, _is_retry: bool = False) -> None:
 
             await db.commit()
 
-        # Clean up pending registration keys after successful commit
-        pending_keys = [
-            item.pending_key for item in items
-            if isinstance(item, RegistrationItem) and item.pending_key
-        ]
-        if pending_keys:
-            from orchestrator.api.apps import _pending_registrations, _pending_lock
-            with _pending_lock:
-                for pk in pending_keys:
-                    _pending_registrations.discard(pk)
-
         duration_ms = (time.perf_counter() - start) * 1000
-        if ingest_count or heartbeat_count or registration_count:
+        if ingest_count or heartbeat_count:
             logger.debug(
-                "Writer flushed %d ingest (%d records) + %d heartbeats + %d registrations in %.0fms",
-                ingest_count, record_count, heartbeat_count, registration_count, duration_ms,
+                "Writer flushed %d ingest (%d records) + %d heartbeats in %.0fms",
+                ingest_count, record_count, heartbeat_count, duration_ms,
             )
 
     except Exception as exc:
-        # Clean up pending keys even on failure so retries aren't blocked
-        pending_keys = [
-            item.pending_key for item in items
-            if isinstance(item, RegistrationItem) and item.pending_key
-        ]
-        if pending_keys:
-            from orchestrator.api.apps import _pending_registrations, _pending_lock
-            with _pending_lock:
-                for pk in pending_keys:
-                    _pending_registrations.discard(pk)
-
         if not _is_retry:
             # Retry once after 1 second for transient failures (e.g. DB lock timeout)
             logger.warning("Writer flush failed (%d items), retrying once in 1s: %s", len(items), exc)
