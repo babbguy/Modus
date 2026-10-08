@@ -1060,7 +1060,8 @@ class GovernancePolicy(Base):
     On evaluate, policies are loaded for the calling app ordered by:
         1. scope specificity (app > team > platform)
         2. priority ASC within the same scope (lower number = evaluated first)
-    The first matching policy determines the outcome. No fall-through.
+    Every applicable policy is evaluated; the most restrictive outcome wins
+    (deny > throttle > degradation-ladder downshift > allow).
 
     policy_type:
         budget_cap         — deny when cumulative spend exceeds config.cap_usd

@@ -63,8 +63,18 @@ return when an evaluation times out or errors.
 
 ## Policy engine
 
-Policies are evaluated in order of scope specificity (app, then team, then
-platform) and then priority. The first `deny` or `throttle` wins. The engine
+Every applicable policy is evaluated, in order of scope specificity (app, then
+team, then platform) and then priority, and the outcomes are combined with
+"most restrictive wins": `deny` beats `throttle`, which beats a
+`degradation_ladder` downshift (an `allow` that carries a `suggested_model`),
+which beats plain `allow`. A ladder therefore downgrades the model but can
+never bypass a budget cap, denylist, rate limit or any other denial, wherever
+that policy sits in the order. `warn` policies are recorded but never change
+the outcome. An app's enforcement state (below) is checked first and is the
+only thing that short-circuits. The SDK mirrors the stateless types
+(`model_allowlist`, `model_denylist`, `provider_block`, `environment_block`,
+including `conditions` and `warn`) locally from `POST /api/v1/policies/sync`;
+budget, rate and token policies are always decided by the gateway. The engine
 accepts eleven policy types through the API and policy files:
 
 `model_allowlist`, `model_denylist`, `provider_block`, `environment_block`,

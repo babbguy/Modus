@@ -24,6 +24,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **SDK policy sync** called `POST /api/v1/policies` (the create endpoint), so
+  agents never received their policies. It now calls `/api/v1/policies/sync`,
+  keeps the last good set on failure (and logs a warning), and the sync
+  response carries `scope` and `conditions`. Local enforcement now honours
+  conditions, app/team/platform ordering and `warn` (which no longer skips the
+  gateway check).
+- **Alert delivery race**: notifications were started before the alert row was
+  committed, so alerts stayed `notification_sent=false` and delivery rows could
+  reference missing alerts. Alerts are now committed (per threshold) before
+  delivery; `notification_sent`, `notification_result` and
+  `notification_deliveries` reflect the real outcome; delivery tasks are held
+  by a strong reference; transport errors are retried.
+- **Notifications view** scored channel health by a field the writer never
+  set. The delivery result is now `{status, success, error}`, defined once in
+  `threshold_evaluator.channel_result` and read by the dashboard; alerts that
+  were never dispatched are no longer counted as failures.
+- **Connections** double-masked Slack, Teams and webhook URLs so Test hit a
+  masked address and failed. Test now uses the stored secret and clients only
+  ever see masked endpoints. The `degraded` state is now produced (slow, 5xx
+  or elevated recent failure rate) and rendered, and the summary updates after
+  a single-card test.
+- **Degradation ladder** at 70% or more ended evaluation and skipped later
+  policies (budget caps, denylists, rate limits). All policies are now
+  evaluated and combined: deny, then throttle, then ladder downshift, then
+  allow.
+- **Alerts "New Rule" form** always failed (wrong scope and metric values, no
+  team). It now posts a valid body, shows precise errors, and rules can be
+  edited and deleted. The API rejects rules with a missing app or provider,
+  a non-positive critical value, a warning value not below critical, or an app
+  outside the team.
+- Notification test endpoints reported "no channels configured" after a
+  restart until the config page was opened; per-user and per-cost-center
+  thresholds no longer fire against the whole team.
+
 - Creating a team whose slug belonged to a soft-deleted team returned a 500;
   it now returns a 409 explaining the slug is reserved.
 - The dashboard Create Team request dropped its authentication headers when the
