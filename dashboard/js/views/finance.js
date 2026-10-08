@@ -1077,8 +1077,19 @@ function _renderChargeback(data) {
     return;
   }
 
-  const items = Array.isArray(data) ? data : (data.items || data.allocations || []);
-  const total = items.reduce((s, i) => s + Number(i.amount ?? i.allocated_cost ?? 0), 0);
+  // GET /finance/chargeback returns one row per team/app/provider/model line
+  // ({team_slug, team_name, cost_center_code, department, period, cost, ...}).
+  // The tile shows allocation per cost center and team, so roll the lines up.
+  const lines = Array.isArray(data) ? data : [];
+  const grouped = new Map();
+  for (const l of lines) {
+    const key = `${l.cost_center_code}|${l.team_slug}`;
+    const g = grouped.get(key) || { cost_center_code: l.cost_center_code, team_name: l.team_name, period: l.period, amount: 0 };
+    g.amount += Number(l.cost ?? 0);
+    grouped.set(key, g);
+  }
+  const items = Array.from(grouped.values()).sort((a, b) => b.amount - a.amount);
+  const total = items.reduce((s, i) => s + i.amount, 0);
 
   body.innerHTML = `
     <div style="padding:12px">
@@ -1091,10 +1102,10 @@ function _renderChargeback(data) {
         <tbody>
           ${items.slice(0, 20).map(i => `
             <tr>
-              <td style="font-weight:500">${esc(i.cost_center || i.cost_center_name || '—')}</td>
-              <td style="color:var(--muted)">${esc(i.team_name || i.team || '—')}</td>
-              <td style="text-align:right;font-family:var(--mono)">$${Number(i.amount ?? i.allocated_cost ?? 0).toFixed(2)}</td>
-              <td style="text-align:right;font-size:10px;color:var(--muted)">${esc(i.period || i.month || '—')}</td>
+              <td style="font-weight:500">${esc(i.cost_center_code || '—')}</td>
+              <td style="color:var(--muted)">${esc(i.team_name || '—')}</td>
+              <td style="text-align:right;font-family:var(--mono)">$${i.amount.toFixed(2)}</td>
+              <td style="text-align:right;font-size:10px;color:var(--muted)">${esc(i.period || '—')}</td>
             </tr>`).join('')}
         </tbody>
       </table>
@@ -1242,11 +1253,11 @@ function _renderCostCenters(items) {
         <tbody>
           ${items.map(c => `
             <tr>
-              <td style="font-weight:500">${esc(c.name || c.cost_center_name || '—')}</td>
-              <td style="font-family:var(--mono);font-size:11px">${esc(c.code || c.cost_center_code || '—')}</td>
-              <td style="color:var(--muted)">${esc(c.owner || c.owner_email || '—')}</td>
-              <td style="font-size:11px">${(c.teams || []).length} team${(c.teams || []).length !== 1 ? 's' : ''}</td>
-              <td style="text-align:right;font-family:var(--mono)">$${Number(c.monthly_budget ?? 0).toFixed(2)}</td>
+              <td style="font-weight:500">${esc(c.name || '—')}</td>
+              <td style="font-family:var(--mono);font-size:11px">${esc(c.code || '—')}</td>
+              <td style="color:var(--muted)">${esc(c.budget_owner_name || c.budget_owner_email || '—')}</td>
+              <td style="font-size:11px">${c.team_count || 0} team${c.team_count !== 1 ? 's' : ''}</td>
+              <td style="text-align:right;font-family:var(--mono)">${c.budget_monthly_usd != null ? '$' + Number(c.budget_monthly_usd).toFixed(2) : '—'}</td>
             </tr>`).join('')}
         </tbody>
       </table>
@@ -1363,10 +1374,14 @@ async function _saveCostCenter() {
   const payload = {
     name: document.getElementById('cc-name')?.value.trim(),
     code: document.getElementById('cc-code')?.value.trim(),
-    owner: document.getElementById('cc-owner')?.value.trim(),
-    monthly_budget: parseFloat(document.getElementById('cc-budget')?.value || '0'),
   };
+  // Field names follow POST /finance/cost-centers (CostCenterRequest).
+  const owner = document.getElementById('cc-owner')?.value.trim();
+  if (owner) payload.budget_owner_email = owner;
+  const budget = parseFloat(document.getElementById('cc-budget')?.value || '0');
+  if (budget > 0) payload.budget_monthly_usd = budget.toFixed(2);
   if (!payload.name) { showError('Name is required'); return; }
+  if (!payload.code) { showError('Code is required'); return; }
 
   if (btn) { btn.disabled = true; btn.textContent = 'Saving\u2026'; }
 

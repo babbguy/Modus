@@ -6,7 +6,7 @@
 
 import { initGrid, addTiles, loadLayout } from '../grid.js';
 import { createTile, setTileLoading, setTileEmpty, setTileError } from '../tile.js';
-import { apiFetch, rawFetch, esc } from '../api.js';
+import { apiFetch, rawFetch, esc, loadAppNames, appName } from '../api.js';
 import { fmtCost, fmtNum, timeSince } from '../format.js';
 import { get } from '../state.js';
 import { openModal, closeModal } from '../modal.js';
@@ -109,6 +109,7 @@ function _createThresholdsTile() {
 // ── Data fetching ────────────────────────────────────────────────────────────
 
 async function _loadData() {
+  await loadAppNames();
   if (_destroyed) return;
   setTileLoading('alerts-stats', 'cards');
   setTileLoading('alerts-table', 'table');
@@ -205,7 +206,7 @@ function _renderAlerts(items) {
               <td><span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:${sevColor}"></span></td>
               <td style="font-weight:500;color:var(--text)">${esc(a.metric || '\u2014')}</td>
               <td><span style="color:${sevColor};font-size:11px;text-transform:uppercase;font-weight:600">${esc(a.severity || 'info')}</span></td>
-              <td style="font-size:11px;color:var(--muted)">${esc(a.app_id || 'All')}</td>
+              <td style="font-size:11px;color:var(--muted)">${esc(appName(a.app_id) || 'All')}</td>
               <td style="font-family:var(--mono);font-size:11px">${fmtCost(a.actual_value)}</td>
               <td style="font-family:var(--mono);font-size:11px">${fmtCost(a.threshold_value)}</td>
               <td style="font-size:11px;color:var(--muted)">${a.fired_at ? timeSince(a.fired_at) : '\u2014'}</td>
@@ -357,7 +358,7 @@ function _showAlertModal(alert) {
             <span style="color:var(--muted)">Threshold</span>
             <span style="font-family:var(--mono);color:var(--text)">${fmtCost(alert.threshold_value)}</span>
             <span style="color:var(--muted)">App</span>
-            <span style="color:var(--text)">${esc(alert.app_id || 'All apps')}</span>
+            <span style="color:var(--text)">${esc(appName(alert.app_id) || 'All apps')}</span>
             <span style="color:var(--muted)">Fired At</span>
             <span style="font-family:var(--mono);font-size:11px;color:var(--text)">${firedAt}</span>
             <span style="color:var(--muted)">Acknowledged</span>

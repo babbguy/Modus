@@ -144,7 +144,7 @@ async def get_proof(
         variables_checked=row.variables_checked or 0,
         max_depth=row.max_depth or 0,
         solver_time_ms=row.solver_time_ms or 0,
-        proven_at=str(row.proven_at) if row.proven_at else "",
+        proven_at=row.proven_at.isoformat() if row.proven_at else "",
     )
 
 

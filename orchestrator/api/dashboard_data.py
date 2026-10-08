@@ -30,7 +30,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from orchestrator.core.auth import Identity, get_identity
+from orchestrator.core.auth import Identity, get_identity, team_scope_clause
 from orchestrator.db.models import Alert, App, Team, UsageAggregate, AgentHeartbeat
 from orchestrator.db.session import get_session
 
@@ -96,6 +96,9 @@ class ModelBreakdown(BaseModel):
     calls: int
     avg_input_tokens: Optional[int]
     avg_output_tokens: Optional[int]
+    # Share (0-100) of ALL spend in the same window/scope, not just of the
+    # models returned, so a limited "top N" still adds up honestly.
+    pct: float = 0.0
 
 
 class AlertSummary(BaseModel):
@@ -485,23 +488,12 @@ async def top_models(
         identity.assert_team_access(team_id)
 
     since = _window(days)
-    q = select(
-        UsageAggregate.provider,
-        UsageAggregate.model,
-        func.sum(UsageAggregate.total_cost).label("cost"),
-        func.sum(UsageAggregate.call_count).label("calls"),
-        func.sum(UsageAggregate.input_tokens).label("input_tokens"),
-        func.sum(UsageAggregate.output_tokens).label("output_tokens"),
-    ).where(
+    filters = [
         UsageAggregate.period_start >= since,
         UsageAggregate.granularity == "daily",
         UsageAggregate.model.isnot(None),
-    )
-
-    if team_id:
-        q = q.where(UsageAggregate.team_id == team_id)
-    elif not identity.is_platform_admin and identity.team_ids:
-        q = q.where(UsageAggregate.team_id.in_(identity.team_ids))
+        team_scope_clause(UsageAggregate.team_id, identity.visible_team_ids(team_id)),
+    ]
 
     if app_id:
         # Resolve external app_id → internal app uuid
@@ -509,7 +501,22 @@ async def top_models(
             select(App.id).where(App.app_id == app_id)
         )).scalar_one_or_none()
         if app_row is not None:
-            q = q.where(UsageAggregate.app_id == app_row)
+            filters.append(UsageAggregate.app_id == app_row)
+
+    # Total spend for the same filters (before grouping/limit) -> pct denominator.
+    total_cost = (await db.execute(
+        select(func.coalesce(func.sum(UsageAggregate.total_cost), 0)).where(*filters)
+    )).scalar_one()
+    total_cost = Decimal(str(total_cost or 0))
+
+    q = select(
+        UsageAggregate.provider,
+        UsageAggregate.model,
+        func.sum(UsageAggregate.total_cost).label("cost"),
+        func.sum(UsageAggregate.call_count).label("calls"),
+        func.sum(UsageAggregate.input_tokens).label("input_tokens"),
+        func.sum(UsageAggregate.output_tokens).label("output_tokens"),
+    ).where(*filters)
 
     q = (
         q.group_by(UsageAggregate.provider, UsageAggregate.model)
@@ -526,6 +533,7 @@ async def top_models(
             calls=r.calls or 0,
             avg_input_tokens=int(r.input_tokens / r.calls) if r.calls else None,
             avg_output_tokens=int(r.output_tokens / r.calls) if r.calls else None,
+            pct=round(float((r.cost or Decimal("0")) / total_cost * 100), 1) if total_cost > 0 else 0.0,
         )
         for r in rows
     ]
