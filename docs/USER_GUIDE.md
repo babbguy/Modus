@@ -23,6 +23,7 @@
    - 3.8 [Notifications](#38-notifications)
    - 3.9 [Topology](#39-topology)
    - 3.10 [Governance](#310-governance)
+   - 3.11 [Teams](#311-teams)
 4. [Common Tasks](#4-common-tasks)
 5. [Glossary of Metrics](#5-glossary-of-metrics)
 6. [Troubleshooting](#6-troubleshooting)
@@ -272,6 +273,36 @@ Useful for compliance reviews ("show me everything that touches AI").
 
 The chain-of-thought ledger and constitutional AI decisions. Used for
 regulatory audit trails and post-incident review.
+
+### 3.11 Teams
+
+Teams own apps and are the unit budgets, policies and registration tokens
+attach to. Open **Teams** to create, edit, delete and restore them.
+
+**Edit**: Name, slug, description, department, parent team, budgets (overall,
+monthly, quarterly), budget period and cost center. Slugs are unique across all
+teams, including deleted ones. A team cannot be its own parent or sit under one
+of its own descendants. Budgets must be zero or more, with up to 8 decimals.
+
+**Delete**: Deleting is a soft delete, so usage, cost and audit history stay.
+If the team still has apps you must choose what happens to them: move them to
+another team (their policies, thresholds and live spend counters move too, and
+new usage is attributed to the new team), or deactivate them (their API keys
+stop working). Child teams must be moved under another team. The team's
+registration token is always revoked, so no new agent can self-register into it.
+Through the API this is `DELETE /api/v1/teams/{id}` with `reassign_to`,
+`cascade=true` and `reassign_children_to`; without them a team that still has
+apps or child teams is refused with a 409.
+
+**Restore**: Tick **Show deleted teams** and press **Restore**. Apps that were
+moved or deactivated are not brought back, and the registration token must be
+generated again. If the former parent team was deleted too, the restored team
+becomes top level.
+
+API: `GET /api/v1/teams/{id}`, `PATCH /api/v1/teams/{id}`,
+`DELETE /api/v1/teams/{id}`, `POST /api/v1/teams/{id}/restore` and
+`GET /api/v1/teams?include_deleted=true` (platform admins). Money is sent and
+returned as decimal strings. Every change is written to the audit log.
 
 ---
 

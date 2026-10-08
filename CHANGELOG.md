@@ -5,6 +5,27 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Team management**: `GET /api/v1/teams/{id}` (budgets, parent, child teams,
+  app / member / policy counts), `PATCH /api/v1/teams/{id}` (name, slug,
+  description, department, parent, budgets, budget period, cost center),
+  `DELETE /api/v1/teams/{id}` (soft delete with `reassign_to`, `cascade` and
+  `reassign_children_to`; refuses with 409 while apps or child teams remain;
+  always revokes the registration token; usage history is kept),
+  `POST /api/v1/teams/{id}/restore` and `GET /api/v1/teams?include_deleted=true`.
+  Every change is audit-logged with before and after values. The dashboard
+  Teams view gains Edit, Delete (with app reassignment) and Restore.
+
+### Fixed
+
+- Creating a team whose slug belonged to a soft-deleted team returned a 500;
+  it now returns a 409 explaining the slug is reserved.
+- The dashboard Create Team request dropped its authentication headers when the
+  dashboard was signed in with a master key or JWT.
+
 ## [1.0.0] - 2026-10-07 - Initial public release
 
 First public release, under the Apache License 2.0.

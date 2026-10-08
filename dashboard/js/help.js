@@ -144,6 +144,12 @@ export const HELP_REGISTRY = {
     learnMore: '04-set-up-chargeback',
   },
 
+  // ── Teams ─────────────────────────────────────────────────────
+  'teams-table': {
+    title: 'Teams',
+    body: 'Teams own apps, budgets and policies. Edit changes name, slug, parent, budgets and cost center. Delete is a soft delete: if the team has apps you choose to move them to another team or deactivate them (their API keys stop working), and child teams must be moved too. Tick Show deleted teams to Restore one. Usage history is always kept.',
+  },
+
   // ── Policies ──────────────────────────────────────────────────
   'policies-table': {
     title: 'Governance Policies',
