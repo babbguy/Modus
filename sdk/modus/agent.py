@@ -51,6 +51,8 @@ import hashlib
 import json
 import logging
 import os
+import random
+import re
 import ssl
 import threading
 import time
@@ -148,6 +150,45 @@ class PolicyViolationError(Exception):
         super().__init__(" | ".join(parts))
 
 
+def _retry_after_seconds(exc: HTTPError) -> Optional[float]:
+    """Parse a numeric Retry-After header (seconds) from an HTTP error."""
+    try:
+        raw = exc.headers.get("Retry-After") if exc.headers is not None else None
+        if raw is None:
+            return None
+        val = float(str(raw).strip())
+        return val if val >= 0 else None
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+# HTTP statuses on which an ingest batch is kept and retried (with backoff)
+# rather than dropped. 4xx outside this set means the payload itself is
+# invalid, so re-sending it can never succeed.
+_INGEST_RETRYABLE = frozenset({401, 403, 408, 425, 429, 500, 502, 503, 504})
+
+# Session ids accepted by the orchestrator (usage_records.session_id is 64 chars).
+_SESSION_ID_RE = re.compile(r"[A-Za-z0-9._:\-]{1,64}")
+
+# Maximum usage records per raw-format ingest payload (server default
+# max_batch_size is 1000).
+_RAW_CHUNK = 500
+
+
+@dataclass
+class _PendingBatch:
+    """A serialized ingest payload awaiting delivery.
+
+    The body (and its batch_id) is frozen when the batch is built, so every
+    retry re-sends the SAME batch_id and the orchestrator's batch-id dedup
+    guarantees the usage is counted once even if an earlier attempt was
+    accepted but its response was lost.
+    """
+    batch_id: str
+    body: bytes
+    attempts: int = 0
+
+
 # ── Internal data types ────────────────────────────────────────────────────────
 
 @dataclass
@@ -192,6 +233,7 @@ class _AggregationBucket:
     duration_ms_max: Optional[int] = None
     window_start: Optional[str] = None
     window_end: Optional[str] = None
+    hour: Optional[str] = None  # UTC hour "YYYY-MM-DDTHH" the bucket covers
 
     def accumulate(self, record: _UsageRecord) -> None:
         """Merge a single usage record into this bucket. O(1), lock-free within bucket."""
@@ -503,6 +545,26 @@ class ModusAgent:
         self._agg_lock = threading.Lock()
         self._agg_sampled: list[_UsageRecord] = []  # sampled raw traces
         self._trace_counter: int = 0  # monotonic counter for deterministic sampling
+
+        # ── Ingest delivery (exactly-once with server batch-id dedup) ────────
+        # Built payloads wait here until the orchestrator accepts them; a
+        # retry re-sends the identical body (same batch_id). On 429/503 the
+        # agent backs off (Retry-After or exponential, with jitter).
+        self._pending_batches: list[_PendingBatch] = []
+        self._max_pending_batches = _safe_int("MODUS_MAX_PENDING_BATCHES", 1000)
+        self._flush_lock = threading.Lock()
+        self._ingest_backoff_until: float = 0.0
+        self._ingest_backoff_attempt: int = 0
+
+        # ── Evaluate rate-limit handling ─────────────────────────────────────
+        # A 429 from /policy/evaluate means "slow down", not "unreachable":
+        # retry with jittered backoff inside the call's timeout budget, then
+        # fall back to the last decision the server gave for the same
+        # (provider, model, environment). It never trips the circuit breaker.
+        self._evaluate_429_retries = _safe_int("MODUS_EVALUATE_429_RETRIES", 2)
+        self._last_decisions: "collections.OrderedDict[tuple, tuple[float, dict]]" = collections.OrderedDict()
+        self._last_decision_ttl = _safe_float("MODUS_LAST_DECISION_TTL", 300.0)
+        self.rate_limited_count = 0  # evaluate/ingest 429s seen (diagnostics)
 
         # ── Attribution / span tracking (Phase 5) ────────────────────────────
         # Thread-local span stack: each thread has its own call chain.
@@ -1250,50 +1312,119 @@ class ModusAgent:
         if estimated_tokens is not None: payload["estimated_tokens"] = estimated_tokens
         if estimated_cost is not None: payload["estimated_cost"] = str(estimated_cost)
 
-        try:
-            req = urllib_request.Request(
-                f"{self.orchestrator_url}/api/v1/policy/evaluate",
-                data=json.dumps(payload).encode(),
-                headers={"Content-Type": "application/json",
-                         "X-Modus-APIKey": self._api_key,
-                         "User-Agent": f"ModusAgent/{__version__}"},
-                method="POST",
-            )
-            with _urlopen_tls(req, timeout=self.timeout) as resp:
-                result = json.loads(resp.read().decode())
-            # Gateway success — reset failure tracking and circuit breaker
-            self._gateway_consecutive_failures = 0
-            self._gateway_last_success = time.monotonic()
-            self._circuit_breaker_tripped_at = None
-            return result
-        except HTTPError as exc:
-            # Other HTTP errors — treat as unreachable
-            self._gateway_consecutive_failures += 1
-            self._maybe_trip_circuit_breaker()
-            logger.warning("Modus: evaluate returned HTTP %d — %s", exc.code,
-                           "allowing" if self.fail_open else "denying")
-            return ({"decision": "allow", "reason": f"Orchestrator HTTP {exc.code} (fail-open)."}
-                    if self.fail_open else
-                    {"decision": "deny", "reason": f"Orchestrator HTTP {exc.code} (fail-closed)"})
-        except URLError as exc:
-            self._gateway_consecutive_failures += 1
-            self._maybe_trip_circuit_breaker()
+        decision_key = (provider, model, self.environment)
+        deadline = time.monotonic() + max(self.timeout, 0.5)
+        attempt = 0
+        while True:
+            try:
+                return self._post_evaluate(payload, decision_key)
+            except HTTPError as exc:
+                if exc.code != 429:
+                    return self._evaluate_http_error(exc)
+                # 429 = the orchestrator is up and asking us to slow down.
+                # Not a failure: never counts toward the circuit breaker.
+                self.rate_limited_count += 1
+                attempt += 1
+                retry_after = _retry_after_seconds(exc)
+                if retry_after is not None:
+                    delay = retry_after * random.uniform(1.0, 1.2)
+                else:
+                    delay = random.uniform(0.05, 0.1 * (2 ** attempt))
+                if (attempt <= self._evaluate_429_retries
+                        and time.monotonic() + delay < deadline):
+                    logger.info(
+                        "Modus: evaluate rate limited (429) — retry %d/%d in %.2fs",
+                        attempt, self._evaluate_429_retries, delay,
+                    )
+                    time.sleep(delay)
+                    continue
+                return self._rate_limited_decision(decision_key)
+            except URLError as exc:
+                return self._evaluate_unreachable(exc)
+            except Exception as exc:
+                self._gateway_consecutive_failures += 1
+                self._maybe_trip_circuit_breaker()
+                logger.error("Modus: evaluate error: %s", exc)
+                return ({"decision": "allow"} if self.fail_open else
+                        {"decision": "deny", "reason": str(exc)})
+
+    def _post_evaluate(self, payload: dict, decision_key: tuple) -> dict:
+        req = urllib_request.Request(
+            f"{self.orchestrator_url}/api/v1/policy/evaluate",
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json",
+                     "X-Modus-APIKey": self._api_key,
+                     "User-Agent": f"ModusAgent/{__version__}"},
+            method="POST",
+        )
+        with _urlopen_tls(req, timeout=self.timeout) as resp:
+            result = json.loads(resp.read().decode())
+        # Gateway success — reset failure tracking and circuit breaker
+        self._gateway_consecutive_failures = 0
+        self._gateway_last_success = time.monotonic()
+        self._circuit_breaker_tripped_at = None
+        if isinstance(result, dict) and result.get("decision"):
+            self._last_decisions[decision_key] = (time.monotonic(), result)
+            self._last_decisions.move_to_end(decision_key)
+            while len(self._last_decisions) > 256:
+                self._last_decisions.popitem(last=False)
+        return result
+
+    def _rate_limited_decision(self, decision_key: tuple) -> dict:
+        """Decision to use when evaluate stays rate limited past the retry budget.
+
+        Keeps enforcing: reuse the server's most recent decision for the same
+        (provider, model, environment) — a recent deny keeps denying. Only
+        with no recent decision does fail_open/fail_closed apply, and that is
+        logged as rate limiting, not as an outage.
+        """
+        entry = self._last_decisions.get(decision_key)
+        if entry is not None and time.monotonic() - entry[0] <= self._last_decision_ttl:
+            age = time.monotonic() - entry[0]
+            result = dict(entry[1])
             logger.warning(
-                "Modus: evaluate unreachable (%s) — %s | "
-                "consecutive_failures=%d, last_success=%.0fs ago",
-                exc, "allowing" if self.fail_open else "denying",
-                self._gateway_consecutive_failures,
-                time.monotonic() - self._gateway_last_success,
+                "Modus: evaluate still rate limited (429) — enforcing last server "
+                "decision '%s' from %.0fs ago for %s/%s.",
+                result.get("decision"), age, decision_key[0], decision_key[1],
             )
-            return ({"decision": "allow", "reason": "Orchestrator unreachable (fail-open)."}
-                    if self.fail_open else
-                    {"decision": "deny", "reason": f"Orchestrator unreachable (fail-closed): {exc}"})
-        except Exception as exc:
-            self._gateway_consecutive_failures += 1
-            self._maybe_trip_circuit_breaker()
-            logger.error("Modus: evaluate error: %s", exc)
-            return ({"decision": "allow"} if self.fail_open else
-                    {"decision": "deny", "reason": str(exc)})
+            result["reason"] = (
+                f"{result.get('reason') or ''} [last server decision, {age:.0f}s old; "
+                "evaluate rate limited]"
+            ).strip()
+            return result
+        logger.warning(
+            "Modus: evaluate still rate limited (429) and no recent decision for "
+            "%s/%s — %s (local policies and the local budget cap still apply).",
+            decision_key[0], decision_key[1],
+            "allowing (fail-open)" if self.fail_open else "denying (fail-closed)",
+        )
+        return ({"decision": "allow", "reason": "Orchestrator rate limited (fail-open)."}
+                if self.fail_open else
+                {"decision": "deny", "reason": "Orchestrator rate limited (fail-closed)."})
+
+    def _evaluate_http_error(self, exc: HTTPError) -> dict:
+        # Other HTTP errors — treat as unreachable
+        self._gateway_consecutive_failures += 1
+        self._maybe_trip_circuit_breaker()
+        logger.warning("Modus: evaluate returned HTTP %d — %s", exc.code,
+                       "allowing" if self.fail_open else "denying")
+        return ({"decision": "allow", "reason": f"Orchestrator HTTP {exc.code} (fail-open)."}
+                if self.fail_open else
+                {"decision": "deny", "reason": f"Orchestrator HTTP {exc.code} (fail-closed)"})
+
+    def _evaluate_unreachable(self, exc: URLError) -> dict:
+        self._gateway_consecutive_failures += 1
+        self._maybe_trip_circuit_breaker()
+        logger.warning(
+            "Modus: evaluate unreachable (%s) — %s | "
+            "consecutive_failures=%d, last_success=%.0fs ago",
+            exc, "allowing" if self.fail_open else "denying",
+            self._gateway_consecutive_failures,
+            time.monotonic() - self._gateway_last_success,
+        )
+        return ({"decision": "allow", "reason": "Orchestrator unreachable (fail-open)."}
+                if self.fail_open else
+                {"decision": "deny", "reason": f"Orchestrator unreachable (fail-closed): {exc}"})
 
     def _maybe_trip_circuit_breaker(self) -> None:
         if (self._gateway_consecutive_failures >= self._circuit_breaker_threshold
@@ -1415,7 +1546,11 @@ class ModusAgent:
             budget_usd: Optional per-session budget cap.
         """
         sid = session_id or uuid.uuid4().hex
-        return self._SessionCtx(self, sid, budget_usd)
+        if not _SESSION_ID_RE.fullmatch(str(sid)):
+            # The orchestrator stores session ids in a 64-char column and
+            # rejects anything else; fail here, at the caller, not at flush.
+            raise ValueError("session_id must be 1-64 characters of [A-Za-z0-9._:-]")
+        return self._SessionCtx(self, str(sid), budget_usd)
 
     class _SpanCtx:
         """Context manager for a named span within a session."""
@@ -1547,6 +1682,14 @@ class ModusAgent:
         if input_tokens is not None or output_tokens is not None:
             total_tokens = (input_tokens or 0) + (output_tokens or 0)
 
+        # Inside agent.session()/span(): attach the session + span ids so the
+        # call reaches the Sessions view and the attribution engine. Explicit
+        # caller-supplied ids win.
+        if not (metadata and metadata.get("mds_session_id")):
+            span_meta = self._current_span_meta()
+            if span_meta:
+                metadata = {**span_meta, **(metadata or {})}
+
         rec = _UsageRecord(
             provider=provider, resource_type=resource_type,
             model=model, operation=operation,
@@ -1570,35 +1713,49 @@ class ModusAgent:
                     )
                 self._records.append(rec)
 
+    @staticmethod
+    def _bucket_key(record: _UsageRecord) -> str:
+        """Aggregation key: UTC hour + (provider, model, operation, resource_type).
+
+        Including the hour keeps every bucket inside one UTC hour, so the
+        orchestrator books it to the right hour and day (a bucket spanning
+        23:59-00:00 would otherwise be booked entirely to the previous day).
+        """
+        hour = (record.timestamp or "")[:13]
+        return f"{hour}|{record.provider}:{record.model or ''}:{record.operation or ''}:{record.resource_type}"
+
     def _aggregate_record(self, record: _UsageRecord) -> None:
         """
-        Route a record into aggregation buckets or sampled traces.
+        Accumulate a record into its bucket and decide whether it is also
+        sent at full detail as a trace.
 
-        Aggregation key: (provider, model, operation, resource_type).
-        Policy violations (metadata flag) always kept as raw traces.
-        Normal records: deterministic sampling at _trace_sample_rate,
-        remainder accumulated into bucket counters.
+        Every record is counted in exactly one bucket. Traces are detail only
+        (the payload says ``traces_counted_in_aggregates``) and are kept for:
+        policy violations, errors, calls inside an agent session (needed by
+        the Sessions view / attribution engine), and a deterministic sample at
+        ``_trace_sample_rate``.
         """
-        # Policy violations and errors always kept at full detail
-        is_violation = record.metadata and record.metadata.get("_policy_violation")
-        is_error = record.metadata and record.metadata.get("_error")
+        meta = record.metadata or {}
+        keep_trace = bool(
+            meta.get("_policy_violation") or meta.get("_error") or meta.get("mds_session_id")
+        )
 
         with self._agg_lock:
-            if is_violation or is_error:
-                self._agg_sampled.append(record)
-                return
-
-            # Deterministic sampling: keep every Nth record as a raw trace
-            self._trace_counter += 1
-            if self._trace_sample_rate > 0 and self._trace_counter > 0:
+            if not keep_trace and self._trace_sample_rate > 0:
+                # Deterministic sampling: keep every Nth record as a raw trace
+                self._trace_counter += 1
                 sample_interval = max(1, int(1.0 / self._trace_sample_rate))
-                if self._trace_counter % sample_interval == 0:
-                    self._agg_sampled.append(record)
-                    # Still accumulate into bucket for accurate totals
-                    # (the sample is for debugging, not for counting)
+                keep_trace = self._trace_counter % sample_interval == 0
+            if keep_trace:
+                if len(self._agg_sampled) >= self._max_buffer_size:
+                    self._agg_sampled.pop(0)
+                    logger.warning(
+                        "Modus: trace buffer full (%d). Dropping oldest trace "
+                        "(usage totals are unaffected).", self._max_buffer_size,
+                    )
+                self._agg_sampled.append(record)
 
-            # Accumulate into bucket
-            key = f"{record.provider}:{record.model or ''}:{record.operation or ''}:{record.resource_type}"
+            key = self._bucket_key(record)
             bucket = self._agg_buckets.get(key)
             if bucket is None:
                 bucket = _AggregationBucket(
@@ -1606,6 +1763,7 @@ class ModusAgent:
                     model=record.model,
                     operation=record.operation,
                     resource_type=record.resource_type,
+                    hour=(record.timestamp or "")[:13] or None,
                 )
                 self._agg_buckets[key] = bucket
             bucket.accumulate(record)
@@ -1613,11 +1771,10 @@ class ModusAgent:
     def _rec(self, provider: str, model: Optional[str], operation: str,
              input_tokens: Optional[int], output_tokens: Optional[int],
              duration_ms: int, metadata: Optional[dict] = None) -> None:
-        """Internal shorthand for all instrumentation methods."""
-        # Inject span metadata if a session is active (~50ns overhead)
-        span_meta = self._current_span_meta()
-        if span_meta:
-            metadata = {**(metadata or {}), **span_meta}
+        """Internal shorthand for all instrumentation methods.
+
+        record() attaches the active session/span metadata.
+        """
         self.record(provider=provider, model=model, operation=operation,
                     input_tokens=input_tokens, output_tokens=output_tokens,
                     duration_ms=duration_ms, metadata=metadata)
@@ -2585,76 +2742,70 @@ class ModusAgent:
         while not self._shutdown.wait(timeout=self.flush_interval):
             self._flush()
             self._flush_routing_outcomes()
-        self._flush()
+        self._flush(final=True)
         self._flush_routing_outcomes()
 
-    def _flush(self) -> None:
+    def _flush(self, final: bool = False) -> None:
         if not self._api_key:
             return
 
         if self._aggregation_enabled:
-            self._flush_aggregated()
+            self._flush_aggregated(final=final)
         else:
-            self._flush_raw()
+            self._flush_raw(final=final)
 
-    def _flush_raw(self) -> None:
-        """Original flush path: send individual records."""
+    @staticmethod
+    def _record_json(r: _UsageRecord) -> dict:
+        return {
+            "provider": r.provider,
+            "resource_type": r.resource_type,
+            "model": r.model,
+            "operation": r.operation,
+            "input_tokens": r.input_tokens,
+            "output_tokens": r.output_tokens,
+            "total_tokens": r.total_tokens,
+            "input_cost": str(r.input_cost) if r.input_cost is not None else None,
+            "output_cost": str(r.output_cost) if r.output_cost is not None else None,
+            "total_cost": str(r.total_cost),
+            "duration_ms": r.duration_ms,
+            "timestamp": r.timestamp,
+            "metadata": r.metadata,
+        }
+
+    def _queue_batch(self, payload: dict) -> None:
+        """Freeze a payload (with a fresh batch_id) into the pending queue."""
+        batch_id = str(uuid.uuid4())
+        body = json.dumps({"batch_id": batch_id, **payload}).encode()
+        self._pending_batches.append(_PendingBatch(batch_id=batch_id, body=body))
+        while len(self._pending_batches) > self._max_pending_batches:
+            dropped = self._pending_batches.pop(0)
+            logger.error(
+                "Modus: %d ingest batches pending (orchestrator unreachable). "
+                "DROPPING oldest batch %s — its usage is lost. Raise "
+                "MODUS_MAX_PENDING_BATCHES or restore connectivity.",
+                self._max_pending_batches + 1, dropped.batch_id,
+            )
+
+    def _build_raw_batches(self) -> None:
         with self._records_lock:
             if not self._records:
                 return
             batch = self._records[:]
             self._records.clear()
+        for k in range(0, len(batch), _RAW_CHUNK):
+            self._queue_batch({
+                "agent_version": __version__,
+                "sdk_versions": self._sdk_versions,
+                "records": [self._record_json(r) for r in batch[k:k + _RAW_CHUNK]],
+            })
 
-        payload = json.dumps({
-            "batch_id": str(uuid.uuid4()),
-            "agent_version": __version__,
-            "sdk_versions": self._sdk_versions,
-            "records": [
-                {
-                    "provider": r.provider,
-                    "resource_type": r.resource_type,
-                    "model": r.model,
-                    "operation": r.operation,
-                    "input_tokens": r.input_tokens,
-                    "output_tokens": r.output_tokens,
-                    "total_tokens": r.total_tokens,
-                    "input_cost": str(r.input_cost) if r.input_cost else None,
-                    "output_cost": str(r.output_cost) if r.output_cost else None,
-                    "total_cost": str(r.total_cost),
-                    "duration_ms": r.duration_ms,
-                    "timestamp": r.timestamp,
-                    "metadata": r.metadata,
-                }
-                for r in batch
-            ],
-        }).encode()
-
-        try:
-            req = urllib_request.Request(
-                f"{self.orchestrator_url}/api/v1/ingest",
-                data=payload,
-                headers={
-                    "Content-Type": "application/json",
-                    "X-Modus-APIKey": self._api_key,
-                    "User-Agent": f"ModusAgent/{__version__}",
-                },
-                method="POST",
-            )
-            with _urlopen_tls(req, timeout=10) as resp:
-                result = json.loads(resp.read().decode())
-                logger.debug("Modus: flush accepted=%d", result.get("accepted", 0))
-        except Exception as exc:
-            logger.warning("Modus: flush failed: %s", exc)
-            with self._records_lock:
-                self._records = batch + self._records
-
-    def _flush_aggregated(self) -> None:
+    def _build_aggregated_batch(self) -> None:
         """
-        Aggregated flush: send bucket summaries + sampled raw traces.
-
-        Payload format v2:
-          - "aggregates": list of bucket summaries (1 per unique key)
-          - "traces": list of sampled raw records (violations, errors, samples)
+        Aggregated payload format v2:
+          - "aggregates": bucket summaries (1 per key per UTC hour) — these
+            carry the counted usage of EVERY call
+          - "traces": full-detail records (violations, errors, session calls,
+            samples); detail only, already counted in the aggregates
           - "format": "aggregated" (tells orchestrator which ingest path to use)
 
         A billion calls/day becomes ~hundreds of aggregates per flush.
@@ -2666,80 +2817,113 @@ class ModusAgent:
             self._agg_buckets.clear()
             sampled = self._agg_sampled[:]
             self._agg_sampled.clear()
-
-        payload = json.dumps({
-            "batch_id": str(uuid.uuid4()),
+        self._queue_batch({
             "agent_version": __version__,
             "sdk_versions": self._sdk_versions,
             "format": "aggregated",
+            "traces_counted_in_aggregates": True,
             "aggregates": [b.to_dict() for b in buckets],
-            "traces": [
-                {
-                    "provider": r.provider,
-                    "resource_type": r.resource_type,
-                    "model": r.model,
-                    "operation": r.operation,
-                    "input_tokens": r.input_tokens,
-                    "output_tokens": r.output_tokens,
-                    "total_tokens": r.total_tokens,
-                    "input_cost": str(r.input_cost) if r.input_cost else None,
-                    "output_cost": str(r.output_cost) if r.output_cost else None,
-                    "total_cost": str(r.total_cost),
-                    "duration_ms": r.duration_ms,
-                    "timestamp": r.timestamp,
-                    "metadata": r.metadata,
-                }
-                for r in sampled
-            ],
-        }).encode()
+            "traces": [self._record_json(r) for r in sampled],
+        })
 
-        try:
-            req = urllib_request.Request(
-                f"{self.orchestrator_url}/api/v1/ingest",
-                data=payload,
-                headers={
-                    "Content-Type": "application/json",
-                    "X-Modus-APIKey": self._api_key,
-                    "User-Agent": f"ModusAgent/{__version__}",
-                },
-                method="POST",
+    def _ingest_backoff(self, retry_after: Optional[float]) -> float:
+        """Next delay before retrying ingest: Retry-After or exponential, + jitter."""
+        self._ingest_backoff_attempt += 1
+        if retry_after is not None:
+            base = min(retry_after, 300.0)
+            delay = base + random.uniform(0, min(max(base, 1.0), 5.0))
+        else:
+            cap = min(300.0, float(2 ** min(self._ingest_backoff_attempt, 8)))
+            delay = random.uniform(cap / 2, cap)
+        self._ingest_backoff_until = time.monotonic() + delay
+        return delay
+
+    def _send_pending(self, ignore_backoff: bool = False) -> None:
+        """Deliver pending batches in order; stop at the first retryable failure."""
+        if not self._pending_batches:
+            return
+        if not ignore_backoff and time.monotonic() < self._ingest_backoff_until:
+            logger.debug(
+                "Modus: ingest backing off for %.1fs (%d batches pending)",
+                self._ingest_backoff_until - time.monotonic(), len(self._pending_batches),
             )
-            with _urlopen_tls(req, timeout=10) as resp:
-                result = json.loads(resp.read().decode())
-                logger.debug(
-                    "Modus: aggregated flush — %d aggregates, %d traces, accepted=%s",
-                    len(buckets), len(sampled), result.get("accepted", 0),
+            return
+        while self._pending_batches:
+            pb = self._pending_batches[0]
+            pb.attempts += 1
+            try:
+                req = urllib_request.Request(
+                    f"{self.orchestrator_url}/api/v1/ingest",
+                    data=pb.body,
+                    headers={
+                        "Content-Type": "application/json",
+                        "X-Modus-APIKey": self._api_key,
+                        "User-Agent": f"ModusAgent/{__version__}",
+                    },
+                    method="POST",
                 )
-        except Exception as exc:
-            logger.warning("Modus: aggregated flush failed: %s", exc)
-            # Re-queue buckets and traces on failure
-            with self._agg_lock:
-                for b in buckets:
-                    key = f"{b.provider}:{b.model or ''}:{b.operation or ''}:{b.resource_type}"
-                    existing = self._agg_buckets.get(key)
-                    if existing:
-                        # Merge back — add counts from failed flush to current
-                        existing.call_count += b.call_count
-                        existing.input_tokens += b.input_tokens
-                        existing.output_tokens += b.output_tokens
-                        existing.total_tokens += b.total_tokens
-                        existing.input_cost += b.input_cost
-                        existing.output_cost += b.output_cost
-                        existing.total_cost += b.total_cost
-                        existing.duration_ms_sum += b.duration_ms_sum
-                        if b.duration_ms_min is not None:
-                            if existing.duration_ms_min is None or b.duration_ms_min < existing.duration_ms_min:
-                                existing.duration_ms_min = b.duration_ms_min
-                        if b.duration_ms_max is not None:
-                            if existing.duration_ms_max is None or b.duration_ms_max > existing.duration_ms_max:
-                                existing.duration_ms_max = b.duration_ms_max
-                        if b.window_start and (existing.window_start is None or b.window_start < existing.window_start):
-                            existing.window_start = b.window_start
-                        if b.window_end and (existing.window_end is None or b.window_end > existing.window_end):
-                            existing.window_end = b.window_end
-                    else:
-                        self._agg_buckets[key] = b
-                self._agg_sampled = sampled + self._agg_sampled
+                with _urlopen_tls(req, timeout=10) as resp:
+                    result = json.loads(resp.read().decode())
+                logger.debug(
+                    "Modus: ingest batch %s accepted=%s (attempt %d)",
+                    pb.batch_id, result.get("accepted", 0), pb.attempts,
+                )
+                self._pending_batches.pop(0)
+                self._ingest_backoff_attempt = 0
+                self._ingest_backoff_until = 0.0
+            except HTTPError as exc:
+                if exc.code not in _INGEST_RETRYABLE:
+                    self._pending_batches.pop(0)
+                    try:
+                        detail = exc.read().decode(errors="replace")[:300]
+                    except Exception:
+                        detail = ""
+                    logger.error(
+                        "Modus: ingest batch %s rejected with HTTP %d and DROPPED "
+                        "(not retryable): %s", pb.batch_id, exc.code, detail,
+                    )
+                    continue
+                if exc.code == 429:
+                    self.rate_limited_count += 1
+                delay = self._ingest_backoff(_retry_after_seconds(exc))
+                logger.warning(
+                    "Modus: ingest batch %s got HTTP %d — kept, retrying in %.1fs "
+                    "(%d batches pending)", pb.batch_id, exc.code, delay,
+                    len(self._pending_batches),
+                )
+                return
+            except Exception as exc:
+                delay = self._ingest_backoff(None)
+                logger.warning(
+                    "Modus: ingest batch %s failed (%s) — kept, retrying in %.1fs "
+                    "(%d batches pending)", pb.batch_id, exc, delay,
+                    len(self._pending_batches),
+                )
+                return
+
+    def _flush_raw(self, final: bool = False) -> None:
+        """Flush buffered raw records (and retry pending batches).
+
+        ``final`` (shutdown) makes one last delivery attempt even inside a
+        backoff window.
+        """
+        if not self._api_key:
+            return
+        with self._flush_lock:
+            self._build_raw_batches()
+            self._send_pending(ignore_backoff=final)
+
+    def _flush_aggregated(self, final: bool = False) -> None:
+        """Flush aggregation buckets + traces (and retry pending batches).
+
+        Raw records buffered before aggregation was enabled are drained too.
+        """
+        if not self._api_key:
+            return
+        with self._flush_lock:
+            self._build_aggregated_batch()
+            self._build_raw_batches()
+            self._send_pending(ignore_backoff=final)
 
     def _shutdown_flush(self) -> None:
         self._shutdown.set()
@@ -2777,6 +2961,12 @@ class ModusAgent:
             )
             with _urlopen_tls(req, timeout=5) as resp:
                 self._handle_heartbeat_response(resp)
+        except HTTPError as exc:
+            if exc.code == 429:
+                self.rate_limited_count += 1
+                logger.info("Modus: heartbeat rate limited (429); next heartbeat in 60s.")
+            else:
+                logger.debug("Modus: heartbeat: HTTP %d", exc.code)
         except Exception as exc:
             logger.debug("Modus: heartbeat: %s", exc)
 

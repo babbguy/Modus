@@ -111,11 +111,11 @@ async def test_ai_explain_fallback_on_failure():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 4. ANOMALY SCAN (SQLite → skipped)
+# 4. ANOMALY SCAN (runs on SQLite)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-async def test_anomaly_scan_skips_sqlite():
-    """Anomaly scan requires PostgreSQL — should be a no-op on SQLite."""
+async def test_anomaly_scan_runs_on_sqlite_without_data():
+    """The anomaly scan is portable: on SQLite with no data it completes cleanly."""
     from orchestrator.core.insights_engine import run_anomaly_scan
     # Should not raise
     await run_anomaly_scan()

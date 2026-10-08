@@ -14,16 +14,17 @@ These are the highest-volume endpoints. Design priorities:
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
 import bcrypt
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -46,6 +47,24 @@ router = APIRouter()
 
 # ── Request / Response schemas ────────────────────────────────────────────────
 
+# Metadata keys that carry an agent session id. The SDK sends
+# ``mds_session_id`` (plus ``mds_call_id`` / ``mds_parent_id`` span ids that the
+# attribution engine reads from the stored metadata); ``session_id`` is
+# accepted for hand-written integrations.
+_SESSION_META_KEYS = ("mds_session_id", "session_id")
+_SESSION_ID_RE = re.compile(r"[A-Za-z0-9._:\-]{1,64}")
+
+
+def _session_id_of(metadata: Optional[dict]) -> Optional[str]:
+    if not metadata:
+        return None
+    for k in _SESSION_META_KEYS:
+        sid = metadata.get(k)
+        if sid:
+            return sid
+    return None
+
+
 class UsageRecordIn(BaseModel):
     """Single usage record from agent payload."""
 
@@ -66,6 +85,23 @@ class UsageRecordIn(BaseModel):
     timestamp: datetime
 
     metadata: Optional[dict] = None
+
+    @field_validator("metadata")
+    @classmethod
+    def check_session_meta(cls, v: Optional[dict]) -> Optional[dict]:
+        # The session id is copied into usage_records.session_id
+        # (VARCHAR(64)); reject a value that cannot be stored intact rather
+        # than truncating it and merging unrelated sessions.
+        if v:
+            for k in _SESSION_META_KEYS:
+                sid = v.get(k)
+                if sid is None:
+                    continue
+                if not isinstance(sid, str) or not _SESSION_ID_RE.fullmatch(sid):
+                    raise ValueError(
+                        f"metadata.{k} must be 1-64 characters of [A-Za-z0-9._:-]"
+                    )
+        return v
 
     @field_validator("timestamp", mode="before")
     @classmethod
@@ -120,6 +156,12 @@ class AggregateIn(BaseModel):
     def lowercase_provider_agg(cls, v: str) -> str:
         return v.lower().strip()
 
+    @model_validator(mode="after")
+    def check_window(self) -> "AggregateIn":
+        if self.window_end < self.window_start:
+            raise ValueError("window_end must not be before window_start")
+        return self
+
 
 class IngestPayload(BaseModel):
     """
@@ -142,6 +184,11 @@ class IngestPayload(BaseModel):
     format: Optional[str] = None  # "aggregated" | None
     aggregates: Optional[list[AggregateIn]] = None
     traces: Optional[list[UsageRecordIn]] = None
+    # True (SDK >= this release): every traced call is also inside
+    # ``aggregates``, so traces are detail only and never counted again.
+    # Absent/False (older SDKs): policy-violation and error traces were NOT
+    # folded into the aggregates, so those traces are counted on their own.
+    traces_counted_in_aggregates: Optional[bool] = None
 
     @field_validator("records")
     @classmethod
@@ -507,94 +554,90 @@ async def ingest_records(
     return result
 
 
+def _record_dict(rec: UsageRecordIn, app, batch_id: str) -> dict:
+    """Validated usage record -> usage_records row values."""
+    return dict(
+        app_id=str(app.id),
+        team_id=str(app.team_id),
+        provider=rec.provider,
+        resource_type=rec.resource_type,
+        model=rec.model,
+        operation=rec.operation,
+        input_tokens=rec.input_tokens,
+        output_tokens=rec.output_tokens,
+        total_tokens=rec.total_tokens,
+        input_cost=rec.input_cost,
+        output_cost=rec.output_cost,
+        total_cost=rec.total_cost,
+        duration_ms=rec.duration_ms,
+        timestamp=rec.timestamp,
+        metadata_=rec.metadata,
+        session_id=_session_id_of(rec.metadata),
+        batch_id=batch_id,
+    )
+
+
+def _observe_usage(provider: str, resource_type: str, calls: int, cost, in_tok, out_tok) -> None:
+    """Prometheus counters (in-memory, no DB)."""
+    INGEST_RECORDS_TOTAL.labels(provider=provider, resource_type=resource_type).inc(calls)
+    if cost:
+        TOTAL_COST_INGESTED.labels(provider=provider).inc(float(cost))
+    if in_tok:
+        TOTAL_TOKENS_INGESTED.labels(provider=provider, token_type="input").inc(in_tok)
+    if out_tok:
+        TOTAL_TOKENS_INGESTED.labels(provider=provider, token_type="output").inc(out_tok)
+
+
+async def _enqueue_or_503(item) -> None:
+    """Hand the batch to the writer; never answer 202 for a dropped batch."""
+    from orchestrator.core.write_queue import enqueue
+    # enqueue() returns False when the queue is full and the item was dropped.
+    if await enqueue(item) is False:
+        INGEST_REQUESTS_TOTAL.labels(status="backpressure").inc()
+        logger.error(
+            "Ingest batch not queued (write queue full)",
+            extra={"batch_id": getattr(item, "batch_id", None)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Server is under heavy load. Retry shortly.",
+            headers={"Retry-After": "5"},
+        )
+
+
 async def _ingest_raw(payload: IngestPayload, app) -> IngestResponse:
-    """Original ingest path: individual usage records."""
+    """Raw ingest path: one usage record per call. Every record is counted."""
+    from orchestrator.core.write_queue import IngestItem
+
     records = payload.records or []
     INGEST_BATCH_SIZE.observe(len(records))
 
-    accepted = 0
-    rejected = 0
-    record_dicts = []
-    batch_cost = Decimal("0")
-    batch_input = 0
-    batch_output = 0
-    batch_duration = 0
-
+    record_dicts = [_record_dict(rec, app, payload.batch_id) for rec in records]
+    batch_cost = sum((rec.total_cost or Decimal("0") for rec in records), Decimal("0"))
     for rec in records:
-        try:
-            record_dicts.append(dict(
-                app_id=str(app.id),
-                team_id=str(app.team_id),
-                provider=rec.provider,
-                resource_type=rec.resource_type,
-                model=rec.model,
-                operation=rec.operation,
-                input_tokens=rec.input_tokens,
-                output_tokens=rec.output_tokens,
-                total_tokens=rec.total_tokens,
-                input_cost=rec.input_cost,
-                output_cost=rec.output_cost,
-                total_cost=rec.total_cost,
-                duration_ms=rec.duration_ms,
-                timestamp=rec.timestamp,
-                metadata_=rec.metadata,
-                batch_id=payload.batch_id,
-            ))
-            accepted += 1
+        _observe_usage(rec.provider, rec.resource_type, 1, rec.total_cost,
+                       rec.input_tokens, rec.output_tokens)
 
-            # Accumulate totals for accepted records only
-            batch_cost += rec.total_cost or Decimal("0")
-            batch_input += rec.input_tokens or 0
-            batch_output += rec.output_tokens or 0
-            batch_duration += rec.duration_ms or 0
-
-            # Update Prometheus metrics immediately (in-memory, no DB)
-            INGEST_RECORDS_TOTAL.labels(
-                provider=rec.provider,
-                resource_type=rec.resource_type,
-            ).inc()
-            if rec.total_cost:
-                TOTAL_COST_INGESTED.labels(provider=rec.provider).inc(
-                    float(rec.total_cost)
-                )
-            if rec.input_tokens:
-                TOTAL_TOKENS_INGESTED.labels(
-                    provider=rec.provider, token_type="input"
-                ).inc(rec.input_tokens)
-            if rec.output_tokens:
-                TOTAL_TOKENS_INGESTED.labels(
-                    provider=rec.provider, token_type="output"
-                ).inc(rec.output_tokens)
-
-        except Exception as exc:
-            logger.warning(
-                "Record validation failed",
-                exc_info=exc,
-                extra={"batch_id": payload.batch_id},
-            )
-            rejected += 1
-
-    # ── Push to write queue (non-blocking) ─────────────────────────────────────
-    if accepted > 0:
-        from orchestrator.core.write_queue import enqueue, IngestItem
-
-        await enqueue(IngestItem(
+    if record_dicts:
+        await _enqueue_or_503(IngestItem(
             app_id=str(app.id),
             team_id=str(app.team_id),
             batch_id=payload.batch_id,
             records=record_dicts,
-            record_count=accepted,
+            record_count=len(record_dicts),
             agent_version=payload.agent_version,
             sdk_versions=payload.sdk_versions,
             total_cost=batch_cost,
-            total_input_tokens=batch_input,
-            total_output_tokens=batch_output,
-            total_duration_ms=batch_duration,
+            total_input_tokens=sum(r.input_tokens or 0 for r in records),
+            total_output_tokens=sum(r.output_tokens or 0 for r in records),
+            total_duration_ms=sum(r.duration_ms or 0 for r in records),
+            count_records=True,
+            source="ingest",
         ))
 
     return IngestResponse(
-        accepted=accepted,
-        rejected=rejected,
+        accepted=len(record_dicts),
+        rejected=0,
         duplicate=False,
         batch_id=payload.batch_id,
     )
@@ -602,130 +645,108 @@ async def _ingest_raw(payload: IngestPayload, app) -> IngestResponse:
 
 async def _ingest_aggregated(payload: IngestPayload, app) -> IngestResponse:
     """
-    Aggregated ingest path: SDK-side pre-aggregated summaries + sampled traces.
+    Aggregated ingest path: SDK-side pre-aggregated summaries + traces.
 
     This is the billion-call scale path. Instead of N individual records,
     the SDK sends ~tens of aggregate summaries per flush window.
 
-    Aggregates → UsageAggregate table (direct upsert, no raw records created)
-    Traces → UsageRecord table (policy violations, errors, sampled records)
+    Aggregates -> counted once into the hourly + daily aggregate rows of the
+                  summary's UTC hour (no raw records are created for them).
+    Traces     -> stored as usage_records for detail (sessions, attribution,
+                  violations, sampled calls). They are NOT counted again: the
+                  calls they describe are already inside the aggregates. Only
+                  for older SDKs (no ``traces_counted_in_aggregates``) are
+                  policy-violation / error traces counted, because those SDKs
+                  left them out of the aggregates.
+
+    Everything is one write-queue item under one batch-id claim, so a retried
+    flush is skipped as a whole and never double counts.
     """
-    from orchestrator.core.write_queue import enqueue, IngestItem, AggregationItem
-    import uuid as _uuid_mod
+    from orchestrator.core.usage_rollup import hour_floor, increment_from_record
+    from orchestrator.core.write_queue import IngestItem
 
     aggregates = payload.aggregates or []
     traces = payload.traces or []
-    accepted = 0
-    rejected = 0
+    legacy_traces = not payload.traces_counted_in_aggregates
 
-    # ── Process aggregates → UsageAggregate rows ─────────────────────────────
-    agg_rows = []
-    total_agg_cost = Decimal("0")
-    total_agg_input = 0
-    total_agg_output = 0
-    total_agg_calls = 0
-    total_agg_duration = 0
+    increments: list[dict] = []
+    accepted = 0
+    batch_cost = Decimal("0")
+    batch_in = batch_out = batch_dur = 0
 
     for agg in aggregates:
-        try:
-            # Align window_start to the hour for hourly granularity
-            period_start = agg.window_start.replace(minute=0, second=0, microsecond=0)
-            period_end = period_start + timedelta(hours=1)
+        hour_start = hour_floor(agg.window_start)
+        if hour_floor(agg.window_end) != hour_start:
+            # Current SDKs bucket per UTC hour; an older SDK's bucket can
+            # straddle an hour boundary and is booked to its starting hour.
+            logger.info(
+                "Aggregate window spans more than one UTC hour; booked to %s",
+                hour_start.isoformat(), extra={"batch_id": payload.batch_id},
+            )
+        increments.append({
+            "app_id": str(app.id),
+            "team_id": str(app.team_id),
+            "provider": agg.provider,
+            "model": agg.model,
+            "resource_type": agg.resource_type,
+            "hour_start": hour_start,
+            "call_count": agg.call_count,
+            "input_tokens": agg.input_tokens,
+            "output_tokens": agg.output_tokens,
+            "total_tokens": agg.total_tokens,
+            "input_cost": agg.input_cost,
+            "output_cost": agg.output_cost,
+            "total_cost": agg.total_cost,
+            "duration_ms_sum": agg.duration_ms_sum,
+            "min_duration_ms": agg.duration_ms_min,
+            "max_duration_ms": agg.duration_ms_max,
+        })
+        accepted += agg.call_count
+        batch_cost += agg.total_cost
+        batch_in += agg.input_tokens
+        batch_out += agg.output_tokens
+        batch_dur += agg.duration_ms_sum
+        _observe_usage(agg.provider, agg.resource_type, agg.call_count, agg.total_cost,
+                       agg.input_tokens, agg.output_tokens)
 
-            agg_rows.append(dict(
-                id=str(_uuid_mod.uuid4()),
-                app_id=str(app.id),
-                team_id=str(app.team_id),
-                provider=agg.provider,
-                model=agg.model,
-                resource_type=agg.resource_type,
-                granularity="hourly",
-                period_start=period_start,
-                period_end=period_end,
-                call_count=agg.call_count,
-                input_tokens=agg.input_tokens,
-                output_tokens=agg.output_tokens,
-                total_tokens=agg.total_tokens,
-                input_cost=agg.input_cost,
-                output_cost=agg.output_cost,
-                total_cost=agg.total_cost,
-                avg_duration_ms=agg.duration_ms_avg,
-                min_duration_ms=agg.duration_ms_min,
-                max_duration_ms=agg.duration_ms_max,
-                duration_ms_sum=agg.duration_ms_sum,
-                source="sdk",
-            ))
-            accepted += agg.call_count
-            total_agg_cost += agg.total_cost
-            total_agg_input += agg.input_tokens
-            total_agg_output += agg.output_tokens
-            total_agg_calls += agg.call_count
-            total_agg_duration += agg.duration_ms_sum
-
-            # Prometheus metrics for aggregated data
-            INGEST_RECORDS_TOTAL.labels(
-                provider=agg.provider,
-                resource_type=agg.resource_type,
-            ).inc(agg.call_count)
-            if agg.total_cost:
-                TOTAL_COST_INGESTED.labels(provider=agg.provider).inc(float(agg.total_cost))
-            if agg.input_tokens:
-                TOTAL_TOKENS_INGESTED.labels(provider=agg.provider, token_type="input").inc(agg.input_tokens)
-            if agg.output_tokens:
-                TOTAL_TOKENS_INGESTED.labels(provider=agg.provider, token_type="output").inc(agg.output_tokens)
-
-        except Exception as exc:
-            logger.warning("Aggregate validation failed: %s", exc, extra={"batch_id": payload.batch_id})
-            rejected += 1
-
-    if agg_rows:
-        await enqueue(AggregationItem(rows=agg_rows, granularity="hourly"))
-
-    # ── Process traces → UsageRecord (violations, errors, samples) ───────────
     trace_dicts = []
     for rec in traces:
-        try:
-            trace_dicts.append(dict(
-                app_id=str(app.id),
-                team_id=str(app.team_id),
-                provider=rec.provider,
-                resource_type=rec.resource_type,
-                model=rec.model,
-                operation=rec.operation,
-                input_tokens=rec.input_tokens,
-                output_tokens=rec.output_tokens,
-                total_tokens=rec.total_tokens,
-                input_cost=rec.input_cost,
-                output_cost=rec.output_cost,
-                total_cost=rec.total_cost,
-                duration_ms=rec.duration_ms,
-                timestamp=rec.timestamp,
-                metadata_=rec.metadata,
-                batch_id=payload.batch_id,
-            ))
-        except Exception as exc:
-            logger.warning("Trace validation failed: %s", exc, extra={"batch_id": payload.batch_id})
+        row = _record_dict(rec, app, payload.batch_id)
+        trace_dicts.append(row)
+        meta = rec.metadata or {}
+        if legacy_traces and (meta.get("_policy_violation") or meta.get("_error")):
+            increments.append(increment_from_record(row))
+            accepted += 1
+            batch_cost += rec.total_cost or Decimal("0")
+            batch_in += rec.input_tokens or 0
+            batch_out += rec.output_tokens or 0
+            batch_dur += rec.duration_ms or 0
+            _observe_usage(rec.provider, rec.resource_type, 1, rec.total_cost,
+                           rec.input_tokens, rec.output_tokens)
 
-    if trace_dicts:
-        await enqueue(IngestItem(
+    INGEST_BATCH_SIZE.observe(len(aggregates) + len(traces))
+
+    if increments or trace_dicts:
+        await _enqueue_or_503(IngestItem(
             app_id=str(app.id),
             team_id=str(app.team_id),
-            batch_id=f"{payload.batch_id}_traces",
+            batch_id=payload.batch_id,
             records=trace_dicts,
             record_count=len(trace_dicts),
             agent_version=payload.agent_version,
             sdk_versions=payload.sdk_versions,
-            total_cost=Decimal("0"),  # costs already counted in aggregates
-            total_input_tokens=0,
-            total_output_tokens=0,
-            total_duration_ms=0,
+            total_cost=batch_cost,
+            total_input_tokens=batch_in,
+            total_output_tokens=batch_out,
+            total_duration_ms=batch_dur,
+            usage=increments,
+            count_records=False,
+            source="sdk",
         ))
-
-    INGEST_BATCH_SIZE.observe(len(aggregates) + len(traces))
 
     return IngestResponse(
         accepted=accepted,
-        rejected=rejected,
+        rejected=0,
         duplicate=False,
         batch_id=payload.batch_id,
     )

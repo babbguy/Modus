@@ -22,8 +22,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   calls, tokens per call and mean latency for the DevOps view), plus new response
   fields listed under "API conventions" in `docs/ARCHITECTURE.md`.
 
+### Changed
+
+- **Usage aggregation is counted once, at ingest.** The writer adds each
+  batch's usage to its hourly and daily aggregate rows in the same transaction
+  that claims the batch id; the aggregation task now only reconciles daily rows
+  against hourly rows (replace on mismatch) and retention only deletes detail.
+  See docs/ARCHITECTURE.md "Usage data pipeline". Aggregates written by earlier
+  versions may already be inflated; they are not rewritten.
+- **API rate limits have two classes**: SDK machine traffic with an app key
+  (`MODUS_RATE_LIMIT_SDK_PER_MINUTE=6000`, `MODUS_RATE_LIMIT_SDK_BURST=1000`)
+  and everything else (`MODUS_RATE_LIMIT_PER_MINUTE=200`,
+  `MODUS_RATE_LIMIT_BURST=50`). `429` responses carry `Retry-After`.
+- SDK: ingest payloads are retried with the same `batch_id` until accepted
+  (bounded by `MODUS_MAX_PENDING_BATCHES`), raw payloads are split into chunks
+  of 500 records, and aggregation buckets are per UTC hour.
+- New setting `MODUS_HOURLY_AGGREGATE_RETENTION_DAYS` (default 7).
+
 ### Fixed
 
+- The aggregator re-read the last two days of raw usage every minute and added
+  it to the aggregates again (prior-day totals ~20x too high), storage
+  compaction re-added compacted records, and every aggregation cycle also
+  inflated the real-time spend counters used for budget enforcement.
+- Dashboard KPIs read only daily rows while SDK ingest wrote only hourly rows,
+  so live SDK spend did not appear until the faulty rollup ran. Overview,
+  finance, insights and reports now read current daily rows; overview MTD
+  equals finance MTD.
+- Retried aggregated SDK batches were counted again (no batch-id dedup on the
+  aggregated path), and the SDK re-sent failed flushes under a new batch id.
+- SDK sampled traces were counted on top of the aggregates by the old rollup;
+  policy-violation and error calls were left out of the aggregates.
+- `/ingest` dropped the session id, so SDK sessions never reached the Sessions
+  view or the attribution engine. Raw records and aggregated-mode traces now
+  carry `mds_session_id` into `usage_records.session_id`; `agent.record()`
+  inside `agent.session()` attaches the session and span ids; aggregated mode
+  sends session calls as traces. Session ids are validated (1-64 characters).
+- The attribution engine stopped picking up new sessions once 20 sessions had
+  been processed.
+- "vs prior 7d" compared the last 7 days with a 14-day total (always about
+  -50%); it now compares with the 7 days before.
+- Anomaly detection and spend forecasts never ran on SQLite (the default); both
+  are now portable. The anomaly rate now uses the last 1-2 hours of usage
+  instead of mixing one hour of spend with the hours elapsed today.
+- The team spend-anomaly detector summed hourly and daily rows together.
+- The API rate limit (~250 requests/min per key) throttled normal SDK traffic,
+  and the SDK treated `429` as "orchestrator unreachable": it failed open and
+  counted toward its circuit breaker. `evaluate` now retries with jitter and
+  keeps enforcing the last server decision; ingest backs off and retries the
+  same batch.
+- `GET /api/v1/dashboard/summary` returned 500 on PostgreSQL once usage
+  existed (`SUM(bigint)` comes back as Decimal and was divided by a float).
+- `/ingest` answered `202` even when the write queue was full and the batch
+  was dropped; it now answers `503` with `Retry-After`.
 - **SDK policy sync** called `POST /api/v1/policies` (the create endpoint), so
   agents never received their policies. It now calls `/api/v1/policies/sync`,
   keeps the last good set on failure (and logs a warning), and the sync

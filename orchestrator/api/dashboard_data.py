@@ -168,24 +168,29 @@ async def dashboard_summary(
     d30_start = _window(30)
     prior_7d_start = _window(14)
 
-    # Base filter — always restrict to daily granularity to avoid
-    # double-counting when both hourly and daily aggregates exist.
-    def _agg_filter(q, since: datetime):
+    # Base filter — daily rows only. Hourly and daily rows hold the same
+    # usage (both are updated in the same ingest transaction, see
+    # core/usage_rollup.py), so mixing them would double count; daily rows
+    # are current to the last ingested batch, including today's.
+    def _agg_filter(q, since: datetime, until: Optional[datetime] = None):
         q = q.where(
             UsageAggregate.period_start >= since,
             UsageAggregate.granularity == "daily",
         )
+        if until is not None:
+            q = q.where(UsageAggregate.period_start < until)
         if team_id:
             q = q.where(UsageAggregate.team_id == team_id)
         elif not identity.is_platform_admin and identity.team_ids:
             q = q.where(UsageAggregate.team_id.in_(identity.team_ids))
         return q
 
-    async def _sum_cost(since: datetime) -> Decimal:
+    async def _sum_cost(since: datetime, until: Optional[datetime] = None) -> Decimal:
         r = await db.execute(
             _agg_filter(
                 select(func.coalesce(func.sum(UsageAggregate.total_cost), 0)),
                 since,
+                until,
             )
         )
         return r.scalar() or Decimal("0")
@@ -197,7 +202,8 @@ async def dashboard_summary(
                 since,
             )
         )
-        return r.scalar() or 0
+        # SUM(bigint) is NUMERIC on PostgreSQL (Decimal); counts are ints.
+        return int(r.scalar() or 0)
 
     async def _sum_calls(since: datetime) -> int:
         r = await db.execute(
@@ -206,7 +212,7 @@ async def dashboard_summary(
                 since,
             )
         )
-        return r.scalar() or 0
+        return int(r.scalar() or 0)
 
     # MTD = 1st of current month → now
     mtd_start = _now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
@@ -215,7 +221,8 @@ async def dashboard_summary(
     cost_7d = await _sum_cost(d7_start)
     cost_30d = await _sum_cost(d30_start)
     cost_mtd = await _sum_cost(mtd_start)
-    cost_prior_7d = await _sum_cost(prior_7d_start)
+    # The 7 days before the current 7-day window — not the 14-day total.
+    cost_prior_7d = await _sum_cost(prior_7d_start, d7_start)
     tokens_today = await _sum_tokens(today_start)
     tokens_30d = await _sum_tokens(d30_start)
     calls_today = await _sum_calls(today_start)

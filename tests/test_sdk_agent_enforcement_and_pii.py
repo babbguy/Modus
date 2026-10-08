@@ -338,12 +338,16 @@ class TestAggregationFlush:
         )
         agent._agg_buckets["openai:gpt-4o:chat:llm_call"] = bucket
 
-        # Mock _flush_raw to fail
-        with patch.object(agent, "_flush_raw", side_effect=Exception("network error")):
+        with patch("modus.agent._urlopen_tls", side_effect=Exception("network error")):
             agent._flush_aggregated()
 
-        # Bucket should be re-queued
-        assert "openai:gpt-4o:chat:llm_call" in agent._agg_buckets
+        # Kept as a frozen pending batch: the retry re-sends the same batch_id
+        assert agent._agg_buckets == {}
+        assert len(agent._pending_batches) == 1
+        import json as _json
+        body = _json.loads(agent._pending_batches[0].body)
+        assert body["batch_id"] == agent._pending_batches[0].batch_id
+        assert body["aggregates"][0]["call_count"] == 5
 
 
 # ── _try_route_async ─────────────────────────────────────────────────────────

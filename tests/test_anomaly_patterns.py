@@ -175,27 +175,34 @@ class TestDetectTeamSpendAnomaly:
                 total_cost=Decimal("10.00"),
             ))
 
-        # Today: $30 (3x baseline)
-        anom_session.add(UsageAggregate(
-            app_id=app_id,
-            team_id=team_id,
-            provider="openai",
-            model="gpt-4o",
-            resource_type="llm_call",
-            granularity="daily",
-            period_start=now - timedelta(hours=12),
-            period_end=now,
-            call_count=300,
-            input_tokens=30000,
-            output_tokens=15000,
-            total_tokens=45000,
-            total_cost=Decimal("30.00"),
-        ))
+        # Recent: $30 (3x baseline). Ingest writes the same usage to an
+        # hourly AND a daily row; the detector must count it once.
+        for gran, start, end in (
+            ("hourly", now - timedelta(hours=12), now - timedelta(hours=11)),
+            ("daily", now - timedelta(hours=12), now),
+        ):
+            anom_session.add(UsageAggregate(
+                app_id=app_id,
+                team_id=team_id,
+                provider="openai",
+                model="gpt-4o",
+                resource_type="llm_call",
+                granularity=gran,
+                period_start=start,
+                period_end=end,
+                call_count=300,
+                input_tokens=30000,
+                output_tokens=15000,
+                total_tokens=45000,
+                total_cost=Decimal("30.00"),
+            ))
         await anom_session.flush()
 
         signals = await _detect_team_spend_anomaly(anom_session, team_id, now - timedelta(days=14))
         assert len(signals) == 1
         assert signals[0]["signal_type"] == "team_spend_anomaly"
+        # Counted once (not 60.0 from summing the hourly and daily rows)
+        assert signals[0]["evidence"]["recent_24h_spend"] == 30.0
         assert signals[0]["evidence"]["ratio"] >= 2.0
 
     @pytest.mark.asyncio
