@@ -11,6 +11,7 @@ DELETE /api/v1/apps/{id}             — soft-delete an app (dashboard auth)
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import secrets
 import string
@@ -204,7 +205,7 @@ async def register_app(
     # Generate key upfront — returned to caller immediately
     import uuid as _uuid
     api_key = _generate_app_key()
-    api_key_hash = _hash_key(api_key)
+    api_key_hash = await asyncio.to_thread(_hash_key, api_key)
     api_key_prefix = api_key[:16]
     app_uuid = str(_uuid.uuid4())
 
@@ -283,7 +284,7 @@ async def rotate_key(
 
     old_prefix = app.api_key_prefix
     new_key = _generate_app_key()
-    app.api_key_hash = _hash_key(new_key)
+    app.api_key_hash = await asyncio.to_thread(_hash_key, new_key)
     app.api_key_prefix = new_key[:16]
 
     db.add(AuditLog(
