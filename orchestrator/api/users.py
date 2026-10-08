@@ -21,6 +21,7 @@ Endpoints:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -483,7 +484,7 @@ async def invite_user(
 
     # Generate invitation token
     token = f"mds_invite_{secrets.token_urlsafe(32)}"
-    token_hash = bcrypt.hashpw(token.encode(), bcrypt.gensalt(12)).decode()
+    token_hash = (await asyncio.to_thread(bcrypt.hashpw, token.encode(), bcrypt.gensalt(12))).decode()
     token_prefix = token[:20]
 
     expires_at = datetime.now(timezone.utc) + timedelta(days=7)
@@ -594,7 +595,7 @@ async def accept_invitation(
 
     matched_inv = None
     for inv in pending:
-        if bcrypt.checkpw(body.token.encode(), inv.token_hash.encode()):
+        if await asyncio.to_thread(bcrypt.checkpw, body.token.encode(), inv.token_hash.encode()):
             matched_inv = inv
             break
 

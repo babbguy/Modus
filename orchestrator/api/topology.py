@@ -29,6 +29,7 @@ DELETE /api/v1/teams/{team_id}/registration-token
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -90,7 +91,9 @@ async def _resolve_team_token(raw_token: str, db: AsyncSession) -> Optional[Team
         return None
 
     try:
-        if bcrypt.checkpw(raw_token.encode(), team.registration_token_hash.encode()):
+        if await asyncio.to_thread(
+            bcrypt.checkpw, raw_token.encode(), team.registration_token_hash.encode()
+        ):
             return team
     except ValueError as exc:
         # Malformed stored hash — fail closed but leave an audit trail.
@@ -206,7 +209,7 @@ async def self_register(
     # We include it in the upsert but DO NOT update it on conflict —
     # the existing key stays intact.
     new_stable_key = _generate_app_key()
-    new_key_hash = _hash_key(new_stable_key)
+    new_key_hash = await asyncio.to_thread(_hash_key, new_stable_key)
     new_app_uuid = str(__import__("uuid").uuid4())
 
     # Check if app already exists (needed for SQLite path, avoids .returning())
@@ -540,7 +543,7 @@ async def generate_team_token(
         raise HTTPException(404, "Team not found.")
 
     token = _generate_team_token()
-    team.registration_token_hash = _hash_team_token(token)
+    team.registration_token_hash = await asyncio.to_thread(_hash_team_token, token)
     team.registration_token_prefix = token[:20]
 
     db.add(AuditLog(
