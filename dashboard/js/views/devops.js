@@ -166,13 +166,14 @@ async function loadData() {
   setTileLoading('devops-agents', 'cards');
 
   try {
-    const [summary, providers, agentStatus, anomaliesResp, recommendResp, enforcementResp] = await Promise.all([
+    const [summary, providers, agentStatus, anomaliesResp, recommendResp, enforcementResp, opsKpis] = await Promise.all([
       apiFetch('summary').catch(() => null),
       apiFetch('by-provider', { days: 1 }).catch(() => null),
       apiFetch('app-status').catch(() => null),
       _fetchInsights('/api/v1/insights/anomalies'),
       _fetchInsights('/api/v1/insights/recommendations'),
       _fetchInsights('/api/v1/insights/enforcement-summary'),
+      _fetchInsights('/api/v1/insights/ops-kpis'),
     ]);
 
     if (_destroyed) return;
@@ -180,13 +181,16 @@ async function loadData() {
     // Build KPIs entirely from live API — no demo fallbacks
     const kpis = summary ? {
       today_cost: summary.total_cost_today ?? 0,
-      session_cost: summary.total_cost_today != null ? summary.total_cost_today * 0.048 : 0,
       online_agents: summary.online_agents ?? 0,
       total_calls: summary.total_calls_today ?? 0,
       total_tokens: summary.total_tokens_today ?? 0,
-      blocked_today: summary.blocked_today ?? 0,
-      tokens_per_call: summary.tokens_per_call ?? (summary.total_tokens_today && summary.total_calls_today ? Math.round(summary.total_tokens_today / summary.total_calls_today) : 0),
-      p95_latency_ms: summary.p95_latency_ms ?? 0,
+      // Live operational figures come from /insights/ops-kpis; null = no data yet.
+      hour_cost: opsKpis ? opsKpis.cost_this_hour : null,
+      blocked_today: opsKpis ? opsKpis.blocked_today : null,
+      tokens_per_call: opsKpis && opsKpis.tokens_per_call != null
+        ? opsKpis.tokens_per_call
+        : (summary.total_tokens_today && summary.total_calls_today ? Math.round(summary.total_tokens_today / summary.total_calls_today) : null),
+      avg_latency_ms: opsKpis ? opsKpis.avg_latency_ms : null,
     } : null;
 
     // Render each tile — null data triggers proper empty states
@@ -229,6 +233,13 @@ async function _fetchInsights(path) {
 
 // ── Tile renderers ───────────────────────────────────────────────────────────
 
+/** Anomaly severities from the API: low | medium | high | critical. */
+function _sevColor(sev) {
+  if (sev === 'critical' || sev === 'high') return 'var(--danger)';
+  if (sev === 'medium') return 'var(--warn)';
+  return 'var(--accent)';
+}
+
 function _renderKpis(k) {
   const body = document.getElementById('devops-kpis-body');
   if (!body) return;
@@ -238,18 +249,19 @@ function _renderKpis(k) {
     return;
   }
 
-  const sessionCost = fmtCost(k.session_cost ?? (k.today_cost != null ? k.today_cost * 0.048 : 0));
+  const dash = '\u2014';
+  const hourCost = k.hour_cost != null ? fmtCost(k.hour_cost) : dash;
   const todayCost = fmtCost(k.today_cost);
-  const blocked = (k.blocked_today ?? k.blocked ?? 0).toLocaleString();
-  const tpc = k.tokens_per_call ?? (k.total_tokens && k.total_calls ? Math.round(k.total_tokens / k.total_calls) : 1840);
-  const p95 = (k.p95_latency_ms ?? 1240).toLocaleString();
-  const agents = k.online_agents ?? '\u2014';
+  const blocked = k.blocked_today != null ? k.blocked_today.toLocaleString() : dash;
+  const tpc = k.tokens_per_call != null ? fmtNum(Math.round(k.tokens_per_call)) : dash;
+  const latency = k.avg_latency_ms != null ? Math.round(k.avg_latency_ms).toLocaleString() : dash;
+  const agents = k.online_agents ?? dash;
 
   body.innerHTML = `
     <div class="kpi-card">
-      <div class="kpi-label">Cost This Session</div>
-      <div class="kpi-value">${sessionCost}</div>
-      <div class="kpi-sub">last 1h</div>
+      <div class="kpi-label">Cost This Hour</div>
+      <div class="kpi-value">${hourCost}</div>
+      <div class="kpi-sub">current hourly bucket</div>
     </div>
     <div class="kpi-card">
       <div class="kpi-label">Cost Today</div>
@@ -263,13 +275,13 @@ function _renderKpis(k) {
     </div>
     <div class="kpi-card">
       <div class="kpi-label">Tokens / Call</div>
-      <div class="kpi-value">${fmtNum(tpc)}</div>
+      <div class="kpi-value">${tpc}</div>
       <div class="kpi-sub">avg input+output today</div>
     </div>
     <div class="kpi-card">
-      <div class="kpi-label">P95 Latency</div>
-      <div class="kpi-value">${p95}</div>
-      <div class="kpi-sub">ms \u00b7 AI call duration</div>
+      <div class="kpi-label">Avg Latency</div>
+      <div class="kpi-value">${latency}</div>
+      <div class="kpi-sub">ms \u00b7 mean AI call duration today</div>
     </div>
     <div class="kpi-card">
       <div class="kpi-label">Online Agents</div>
@@ -294,17 +306,17 @@ function _renderAnomalies(items) {
 
   body.innerHTML = items.map((a, i) => {
     const sev = esc(a.severity || 'info');
-    const sevColor = sev === 'critical' ? 'var(--danger)' : sev === 'warning' ? 'var(--warn)' : 'var(--accent)';
-    const desc = esc(a.desc ?? a.ai_explanation ?? a.description ?? '');
-    const time = esc(a.time ?? timeSince(a.detected_at ?? new Date().toISOString()));
-    const zLabel = a.z ? `z=${a.z.toFixed(1)}` : '';
+    const sevColor = _sevColor(sev);
+    const desc = esc(a.ai_explanation ?? '');
+    const time = esc(a.detected_at ? timeSince(a.detected_at) : '');
+    const zLabel = typeof a.z_score === 'number' ? `z=${a.z_score.toFixed(1)}` : '';
 
     return `
       <div class="anomaly-item" style="display:flex;align-items:flex-start;gap:10px;padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--border);transition:background 0.15s"
            data-anomaly-idx="${i}">
         <div style="width:8px;height:8px;border-radius:50%;background:${sevColor};margin-top:5px;flex-shrink:0"></div>
         <div style="flex:1;min-width:0">
-          <div style="font-size:12px;font-weight:600;color:var(--text)">${esc(a.app ?? a.app_id ?? '')}</div>
+          <div style="font-size:12px;font-weight:600;color:var(--text)">${esc(a.app_name ?? a.app_id ?? '')}</div>
           <div style="font-size:11px;color:var(--muted);margin-top:2px;line-height:1.5">${desc}</div>
           <div style="font-size:10px;color:var(--muted);margin-top:3px">${time}</div>
         </div>
@@ -338,15 +350,15 @@ function _renderRecommendations(items) {
     return;
   }
 
-  const total = items.reduce((s, r) => s + (r.savings ?? r.estimated_monthly_savings ?? 0), 0);
+  const total = items.reduce((s, r) => s + (r.estimated_monthly_savings ?? 0), 0);
   setTileMeta('devops-recommend', `~$${total.toFixed(0)}/mo potential`);
 
   body.innerHTML = items.map(r => {
-    const app = esc(r.app ?? r.app_id ?? '');
-    const savings = (r.savings ?? r.estimated_monthly_savings ?? 0).toFixed(0);
-    const desc = esc(r.desc ?? r.recommendation_text ?? '');
-    const fromModel = esc(r.from ?? r.current_model ?? '');
-    const toModel = esc(r.to ?? r.suggested_model ?? '');
+    const app = esc(r.app_name ?? r.app_id ?? '');
+    const savings = (r.estimated_monthly_savings ?? 0).toFixed(0);
+    const desc = esc(r.recommendation_text ?? '');
+    const fromModel = esc(r.current_model ?? '');
+    const toModel = esc(r.suggested_model ?? '');
 
     return `
       <div style="padding:10px 12px;border-bottom:1px solid var(--border)">
@@ -389,7 +401,7 @@ function _renderEnforcement(e) {
     ${statRow('Calls Blocked', (e.blocked ?? 0).toLocaleString(), '--danger')}
     ${statRow('Throttled', (e.throttle ?? 0).toLocaleString(), '--warn')}
     ${statRow('Redirected Model', (e.redirect ?? 0).toLocaleString(), '--accent2')}
-    ${statRow('Cost Saved (blocks)', fmtCost(e.saved ?? e.total_savings ?? 0), '--accent')}
+    ${statRow('Cost Saved (blocks)', fmtCost(e.total_savings ?? 0), '--accent')}
   `;
 }
 
@@ -539,22 +551,23 @@ function _renderAgents(items) {
 // ── Modals ────────────────────────────────────────────────────────────────────
 
 function _showAnomalyModal(a) {
-  const sevColors = { critical: 'var(--danger)', warning: 'var(--warn)', info: 'var(--accent)' };
-  const sevColor = sevColors[a.severity] || 'var(--muted)';
+  const sevColor = _sevColor(a.severity);
   const sevLabel = (a.severity || 'info').charAt(0).toUpperCase() + (a.severity || 'info').slice(1);
-  const zScore = a.z ? a.z.toFixed(2) : '\u2014';
-  const zInterpret = !a.z ? '' : a.z >= 4 ? 'Extreme deviation \u2014 immediate investigation recommended.'
-    : a.z >= 3 ? 'Significant deviation \u2014 likely a real issue.'
-    : a.z >= 2 ? 'Moderate deviation \u2014 worth monitoring.'
+  const z = typeof a.z_score === 'number' ? a.z_score : null;
+  const zScore = z != null ? z.toFixed(2) : '\u2014';
+  const zInterpret = z == null ? '' : z >= 4 ? 'Extreme deviation \u2014 immediate investigation recommended.'
+    : z >= 3 ? 'Significant deviation \u2014 likely a real issue.'
+    : z >= 2 ? 'Moderate deviation \u2014 worth monitoring.'
     : 'Mild deviation \u2014 within normal variation.';
-  const desc = a.desc || a.ai_explanation || a.description || 'No description available.';
-  const time = a.time || timeSince(a.detected_at || new Date().toISOString());
+  const desc = a.ai_explanation || 'No description available.';
+  const time = a.detected_at ? timeSince(a.detected_at) : '';
 
-  const badgeCls = a.severity === 'critical' ? 'danger' : a.severity === 'warning' ? 'warning' : 'info';
+  const urgent = a.severity === 'critical' || a.severity === 'high';
+  const badgeCls = urgent ? 'danger' : a.severity === 'medium' ? 'warning' : 'info';
 
-  const actionItems = a.severity === 'critical'
+  const actionItems = urgent
     ? '<li>Review recent deployments and model changes for this app</li><li>Check if a policy override or budget cap should be applied</li><li>Consider temporarily throttling the app via governance policies</li>'
-    : a.severity === 'warning'
+    : a.severity === 'medium'
     ? '<li>Monitor over the next few hours for trend direction</li><li>Check recent code deploys that may have changed prompt patterns</li><li>Review token usage per call for prompt length regression</li>'
     : '<li>Continue monitoring \u2014 this is within acceptable bounds</li><li>Set up an alert threshold if this metric is business-critical</li>';
 
@@ -566,7 +579,7 @@ function _showAnomalyModal(a) {
         <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px">
           <div style="width:12px;height:12px;border-radius:50%;background:${sevColor};flex-shrink:0"></div>
           <div>
-            <div style="font-weight:700;font-size:15px;color:var(--text)">${esc(a.app ?? a.app_id ?? '')}</div>
+            <div style="font-weight:700;font-size:15px;color:var(--text)">${esc(a.app_name ?? a.app_id ?? '')}</div>
             <div style="font-size:11px;color:var(--muted)">${esc(time)}</div>
           </div>
           <span class="ds-badge-${badgeCls}" style="margin-left:auto">${esc(sevLabel)}</span>

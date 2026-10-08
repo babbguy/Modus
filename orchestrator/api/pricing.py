@@ -173,7 +173,7 @@ def _override_to_response(o: PricingOverride) -> PricingOverrideResponse:
 async def list_pricing_models(
     provider: Optional[str] = None,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> list[GlobalPricingEntry]:
     """
     Return the global pricing table (bundled + synced prices).
@@ -213,7 +213,7 @@ async def list_overrides(
     app_id: Optional[str] = None,
     active_only: bool = True,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> list[PricingOverrideResponse]:
     """
     List pricing overrides visible to the caller.
@@ -248,7 +248,7 @@ async def create_override(
     body: PricingOverrideCreate,
     request: Request,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> PricingOverrideResponse:
     """
     Create a negotiated-rate override for a specific provider/model.
@@ -323,7 +323,7 @@ async def update_override(
     body: PricingOverrideUpdate,
     request: Request,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> PricingOverrideResponse:
     identity.assert_permission("pricing:write")
 
@@ -334,10 +334,7 @@ async def update_override(
     if override.team_id:
         identity.assert_team_access(str(override.team_id))
 
-    before = {
-        "input_cost_per_1k": str(override.input_cost_per_1k),
-        "output_cost_per_1k": str(override.output_cost_per_1k),
-    }
+    before = _audit_snapshot(override)
 
     if body.input_cost_per_1k is not None:
         override.input_cost_per_1k = body.input_cost_per_1k
@@ -360,10 +357,20 @@ async def update_override(
         resource_id=override_id,
         action="updated",
         before=before,
-        after=body.model_dump(exclude_none=True, mode="json"),
+        after=_audit_snapshot(override),
     ))
 
     return _override_to_response(override)
+
+
+def _audit_snapshot(override: PricingOverride) -> dict:
+    """Full identifying state of an override for the audit trail (before/after)."""
+    return {
+        "provider": override.provider,
+        "model": override.model,
+        "input_cost_per_1k": str(override.input_cost_per_1k),
+        "output_cost_per_1k": str(override.output_cost_per_1k),
+    }
 
 
 @router.delete(
@@ -376,7 +383,7 @@ async def delete_override(
     override_id: str,
     request: Request,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> None:
     identity.assert_permission("pricing:write")
 
@@ -396,7 +403,7 @@ async def delete_override(
         resource_type="pricing_override",
         resource_id=override_id,
         action="deleted",
-        before={"provider": override.provider, "model": override.model},
+        before=_audit_snapshot(override),
     ))
 
 
@@ -412,7 +419,7 @@ async def effective_price(
     team_id: Optional[str] = None,
     resource_type: str = "llm_call",
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> EffectivePrice:
     """
     Return the price that would actually be used for a given provider/model,
@@ -495,7 +502,7 @@ async def bulk_import_overrides(
     body: BulkImportRequest,
     request: Request,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> BulkImportResponse:
     """
     Import multiple overrides at once. Useful for loading a rate card from a

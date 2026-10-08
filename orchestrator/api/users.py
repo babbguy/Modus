@@ -21,6 +21,7 @@ Endpoints:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -132,7 +133,7 @@ async def list_users(
     offset: int = Query(0, ge=0),
     is_active: Optional[bool] = None,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> list[UserResponse]:
     identity.assert_permission("users:read")
     q = select(User)
@@ -177,7 +178,7 @@ class PasswordChangeRequest(BaseModel):
 @router.get("/users/me", response_model=MeResponse)
 async def get_me(
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> MeResponse:
     """Return the current authenticated user's profile.
 
@@ -218,7 +219,7 @@ async def get_me(
 async def update_me(
     body: MeUpdateRequest,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> MeResponse:
     """Update the current user's display name and/or email."""
     if not identity.user_id:
@@ -286,7 +287,7 @@ async def list_invitations(
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> list[InvitationResponse]:
     identity.assert_permission("users:invite")
 
@@ -330,7 +331,7 @@ async def list_invitations(
 async def get_user(
     user_id: str,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> UserResponse:
     identity.assert_permission("users:read")
     user = (await db.execute(
@@ -351,7 +352,7 @@ async def update_user(
     body: UserUpdateRequest,
     request: Request,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> UserResponse:
     identity.assert_permission("users:write")
     user = (await db.execute(
@@ -392,7 +393,7 @@ async def delete_user(
     user_id: str,
     request: Request,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> None:
     identity.assert_permission("users:delete")
     user = (await db.execute(
@@ -434,7 +435,7 @@ async def invite_user(
     body: InviteRequest,
     request: Request,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> InvitationResponse:
     identity.assert_permission("users:invite")
 
@@ -483,7 +484,7 @@ async def invite_user(
 
     # Generate invitation token
     token = f"mds_invite_{secrets.token_urlsafe(32)}"
-    token_hash = bcrypt.hashpw(token.encode(), bcrypt.gensalt(12)).decode()
+    token_hash = (await asyncio.to_thread(bcrypt.hashpw, token.encode(), bcrypt.gensalt(12))).decode()
     token_prefix = token[:20]
 
     expires_at = datetime.now(timezone.utc) + timedelta(days=7)
@@ -549,7 +550,7 @@ async def revoke_invitation(
     invitation_id: str,
     request: Request,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> None:
     identity.assert_permission("users:invite")
     inv = (await db.execute(
@@ -574,7 +575,7 @@ async def revoke_invitation(
 async def accept_invitation(
     body: AcceptInvitationRequest,
     request: Request,
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> UserResponse:
     """
     Public endpoint — no auth required. Token serves as authentication.
@@ -594,7 +595,7 @@ async def accept_invitation(
 
     matched_inv = None
     for inv in pending:
-        if bcrypt.checkpw(body.token.encode(), inv.token_hash.encode()):
+        if await asyncio.to_thread(bcrypt.checkpw, body.token.encode(), inv.token_hash.encode()):
             matched_inv = inv
             break
 
@@ -670,7 +671,7 @@ async def accept_invitation(
 @router.get("/users/me/preferences", response_model=PreferencesResponse)
 async def get_my_preferences(
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> PreferencesResponse:
     if not identity.user_id:
         raise HTTPException(400, "Preferences require an authenticated user account.")
@@ -697,7 +698,7 @@ async def get_my_preferences(
 async def update_my_preferences(
     body: PreferencesUpdateRequest,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> PreferencesResponse:
     if not identity.user_id:
         raise HTTPException(400, "Preferences require an authenticated user account.")

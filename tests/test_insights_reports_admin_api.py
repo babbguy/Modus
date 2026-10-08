@@ -153,11 +153,12 @@ async def test_get_recommendations_include_dismissed(client, seed_insights):
 
 @pytest.mark.asyncio
 async def test_dismiss_recommendation(client, seed_insights):
-    """Dismiss checks team_id match; stub identity has team_id=None so
-    rec with a real team_id returns 404."""
+    """A platform admin (stub identity, no team of its own) can dismiss any
+    team's recommendation; it then drops out of the list."""
     rec_id = str(seed_insights["rec"].id)
     resp = await client.post(f"/api/v1/insights/recommendations/{rec_id}/dismiss")
-    assert resp.status_code == 404
+    assert resp.status_code == 200
+    assert resp.json() == {"dismissed": True}
 
 
 @pytest.mark.asyncio

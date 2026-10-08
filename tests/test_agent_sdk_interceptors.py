@@ -998,8 +998,9 @@ class TestFlushWithNetwork:
         with patch("modus.agent._urlopen_tls", side_effect=fake_urlopen):
             agent._flush_raw()
 
-        # Records should be re-queued
-        assert len(agent._records) == 1
+        # Kept as a pending batch for an idempotent retry
+        assert len(agent._pending_batches) == 1
+        assert len(json.loads(agent._pending_batches[0].body)["records"]) == 1
 
     def test_flush_aggregated_sends_payload(self):
         agent = _make_agent(aggregation_enabled=True, trace_sample_rate=0.0)
@@ -1034,8 +1035,9 @@ class TestFlushWithNetwork:
         with patch("modus.agent._urlopen_tls", side_effect=fake_urlopen):
             agent._flush_aggregated()
 
-        # Buckets should be re-queued
-        assert len(agent._agg_buckets) == 1
+        # Kept as a pending batch for an idempotent retry
+        assert len(agent._pending_batches) == 1
+        assert json.loads(agent._pending_batches[0].body)["aggregates"][0]["call_count"] == 1
 
 
 # ── Self-registration ────────────────────────────────────────────────────────

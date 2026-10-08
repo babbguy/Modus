@@ -73,7 +73,7 @@ class AuditEntry(BaseModel):
 @router.get("/compliance/report", response_model=ComplianceReport, tags=["compliance"])
 async def get_compliance_report(
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> ComplianceReport:
     identity.assert_permission("audit:read")
 
@@ -165,7 +165,7 @@ async def get_evidence_pack(
     since: Optional[datetime] = None,
     until: Optional[datetime] = None,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> dict:
     """Assemble a signed, framework-mapped regulatory evidence pack.
 
@@ -198,7 +198,7 @@ async def get_audit_trail(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> list[AuditEntry]:
     identity.assert_permission("audit:read")
     q = select(AuditLog)

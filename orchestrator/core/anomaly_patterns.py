@@ -218,11 +218,13 @@ async def _detect_team_spend_anomaly(
     baseline_start = now - timedelta(days=8)
     baseline_end = now - timedelta(days=1)
 
-    # Recent 24h spend
+    # Recent 24h spend. Hourly and daily rows hold the same usage, so each
+    # query reads exactly one granularity (summing both double counts).
     recent = await db.execute(
         select(func.coalesce(func.sum(UsageAggregate.total_cost), Decimal("0")))
         .where(
             UsageAggregate.team_id == team_id,
+            UsageAggregate.granularity == "hourly",
             UsageAggregate.period_start >= recent_window,
         )
     )
@@ -233,6 +235,7 @@ async def _detect_team_spend_anomaly(
         select(func.coalesce(func.sum(UsageAggregate.total_cost), Decimal("0")))
         .where(
             UsageAggregate.team_id == team_id,
+            UsageAggregate.granularity == "daily",
             UsageAggregate.period_start >= baseline_start,
             UsageAggregate.period_start < baseline_end,
         )

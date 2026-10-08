@@ -315,257 +315,80 @@ async def create_incident_ticket(
         return False
 
 
-# ── Storage Compaction (Scale Pack foundation) ────────────────────────────────
+# ── Storage retention (Scale Pack foundation) ─────────────────────────────────
 #
-# Rolls up old raw UsageRecord rows into hourly UsageAggregate summaries,
-# then deletes the raw rows. This keeps the database bounded regardless of
-# call volume — the DB only ever holds recent raw data + compact aggregates.
+# Usage is counted into the hourly AND daily aggregates at ingest time (see
+# orchestrator/core/usage_rollup.py), so retention never has to roll anything
+# up: it only deletes detail that the aggregates already contain.
 #
-# Run schedule: hourly (via scheduler in main.py)
-# Compaction window: records older than compaction_after_hours (default: 24)
-# Batch size: processes 10,000 records at a time to avoid long transactions.
+#   Hot:  raw usage_records       0 .. compaction_after_hours (default 24h)
+#   Warm: hourly aggregates       0 .. hourly_aggregate_retention_days (7d)
+#   Cold: daily aggregates        forever
+#
+# Run schedule: hourly (via the maintenance loop in tasks.py).
 
 
 async def compact_usage_records() -> None:
-    """
-    Roll up raw usage_records older than compaction_after_hours into
-    hourly usage_aggregates, then delete the raw rows.
+    """Delete raw usage_records older than ``compaction_after_hours``.
 
-    This is the foundation of bounded storage at scale:
-    - 1B raw calls → ~24h of raw data + compact hourly/daily aggregates
-    - DB size stays predictable regardless of throughput
+    They were counted into the aggregates when they were ingested, so deleting
+    them does not change any total. (Earlier versions rolled them up again
+    here, which double counted.)
     """
     if _session_factory is None:
         return
+    from orchestrator.db.models import UsageRecord
 
     compaction_hours = getattr(settings, "compaction_after_hours", 24)
     cutoff = datetime.now(timezone.utc) - timedelta(hours=compaction_hours)
-    batch_size = 10000
-
-    from orchestrator.db.models import UsageRecord
-
-    total_compacted = 0
-    total_deleted = 0
-
-    while True:
-        async with _session_factory() as db:
-            # Fetch a batch of old records grouped by the compaction key
-            # (app_id, team_id, provider, model, resource_type, hour)
-            #
-            # We use a subquery to find the oldest batch of record IDs,
-            # then aggregate them in Python for portability (SQLite + PG).
-            old_ids_q = (
-                select(UsageRecord.id)
-                .where(UsageRecord.timestamp < cutoff)
-                .limit(batch_size)
-            )
-            old_ids = (await db.execute(old_ids_q)).scalars().all()
-
-            if not old_ids:
-                break
-
-            # Fetch the actual records for aggregation
-            records_q = select(UsageRecord).where(UsageRecord.id.in_(old_ids))
-            records = (await db.execute(records_q)).scalars().all()
-
-            if not records:
-                break
-
-            # Group by (app_id, team_id, provider, model, resource_type, hour)
-            buckets: dict[tuple, dict] = {}
-            for rec in records:
-                hour_start = rec.timestamp.replace(minute=0, second=0, microsecond=0)
-                key = (
-                    rec.app_id, rec.team_id, rec.provider,
-                    rec.model, rec.resource_type, hour_start,
-                )
-                if key not in buckets:
-                    buckets[key] = {
-                        "call_count": 0,
-                        "input_tokens": 0,
-                        "output_tokens": 0,
-                        "total_tokens": 0,
-                        "input_cost": 0,
-                        "output_cost": 0,
-                        "total_cost": 0,
-                        "duration_ms_sum": 0,
-                        "duration_ms_min": None,
-                        "duration_ms_max": None,
-                    }
-                b = buckets[key]
-                b["call_count"] += 1
-                b["input_tokens"] += rec.input_tokens or 0
-                b["output_tokens"] += rec.output_tokens or 0
-                b["total_tokens"] += rec.total_tokens or 0
-                b["input_cost"] += rec.input_cost or 0
-                b["output_cost"] += rec.output_cost or 0
-                b["total_cost"] += rec.total_cost or 0
-                if rec.duration_ms is not None:
-                    b["duration_ms_sum"] += rec.duration_ms
-                    if b["duration_ms_min"] is None or rec.duration_ms < b["duration_ms_min"]:
-                        b["duration_ms_min"] = rec.duration_ms
-                    if b["duration_ms_max"] is None or rec.duration_ms > b["duration_ms_max"]:
-                        b["duration_ms_max"] = rec.duration_ms
-
-            # Upsert aggregates via the write queue
-            from orchestrator.core.write_queue import enqueue, AggregationItem
-            import uuid as _uuid_mod
-
-            agg_rows = []
-            for (app_id, team_id, provider, model, resource_type, hour_start), b in buckets.items():
-                avg_dur = b["duration_ms_sum"] // b["call_count"] if b["call_count"] > 0 else None
-                agg_rows.append(dict(
-                    id=str(_uuid_mod.uuid4()),
-                    app_id=app_id,
-                    team_id=team_id,
-                    provider=provider,
-                    model=model,
-                    resource_type=resource_type,
-                    granularity="hourly",
-                    period_start=hour_start,
-                    period_end=hour_start + timedelta(hours=1),
-                    call_count=b["call_count"],
-                    input_tokens=b["input_tokens"],
-                    output_tokens=b["output_tokens"],
-                    total_tokens=b["total_tokens"],
-                    input_cost=b["input_cost"],
-                    output_cost=b["output_cost"],
-                    total_cost=b["total_cost"],
-                    avg_duration_ms=avg_dur,
-                    min_duration_ms=b["duration_ms_min"],
-                    max_duration_ms=b["duration_ms_max"],
-                    duration_ms_sum=b["duration_ms_sum"],
-                    source="compaction",
-                ))
-
-            if agg_rows:
-                await enqueue(AggregationItem(rows=agg_rows, granularity="hourly"))
-
-            # Delete the compacted raw records
-            await db.execute(
-                delete(UsageRecord).where(UsageRecord.id.in_(old_ids))
-            )
-            await db.commit()
-
-            total_compacted += len(records)
-            total_deleted += len(old_ids)
-
-    if total_compacted > 0:
+    deleted = await _batched_delete(
+        UsageRecord, UsageRecord.timestamp, cutoff, UsageRecord.id,
+        label="raw usage records",
+    )
+    if deleted:
         logger.info(
-            "Storage compaction complete",
-            extra={
-                "records_compacted": total_compacted,
-                "records_deleted": total_deleted,
-                "cutoff_hours": compaction_hours,
-            },
+            "Raw usage record retention complete",
+            extra={"records_deleted": deleted, "cutoff_hours": compaction_hours},
         )
 
 
 async def compact_hourly_to_daily() -> None:
-    """
-    Roll up hourly aggregates older than 7 days into daily aggregates.
+    """Prune hourly aggregates older than ``hourly_aggregate_retention_days``.
 
-    Second stage of the compaction pipeline:
-    - Hot: raw records (0-24h)
-    - Warm: hourly aggregates (1-7d)
-    - Cold: daily aggregates (7d+)
+    The daily rows already hold the same totals (both granularities are
+    updated in the same ingest transaction). Before a day's hourly rows are
+    deleted, any key that has hourly rows but no daily row at all is filled
+    in from the hourly rows, so even data written by older versions is never
+    lost. Existing daily rows are never replaced here. One day per
+    transaction.
     """
     if _session_factory is None:
         return
 
-    from orchestrator.db.models import UsageAggregate
-    import uuid as _uuid_mod
+    from orchestrator.core.usage_rollup import day_floor, oldest_hourly_day, reconcile_daily
 
-    cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+    retention_days = getattr(settings, "hourly_aggregate_retention_days", 7)
+    cutoff_day = day_floor(datetime.now(timezone.utc)) - timedelta(days=retention_days)
 
-    async with _session_factory() as db:
-        # Find hourly aggregates older than 7 days
-        hourly_q = (
-            select(UsageAggregate)
-            .where(
-                UsageAggregate.granularity == "hourly",
-                UsageAggregate.period_start < cutoff,
-            )
-            .limit(5000)
-        )
-        hourlies = (await db.execute(hourly_q)).scalars().all()
-
-        if not hourlies:
-            return
-
-        # Group by (app_id, team_id, provider, model, resource_type, date)
-        daily_buckets: dict[tuple, dict] = {}
-        hourly_ids = []
-
-        for h in hourlies:
-            hourly_ids.append(h.id)
-            day_start = h.period_start.replace(hour=0, minute=0, second=0, microsecond=0)
-            key = (h.app_id, h.team_id, h.provider, h.model, h.resource_type, day_start)
-
-            if key not in daily_buckets:
-                daily_buckets[key] = {
-                    "call_count": 0, "input_tokens": 0, "output_tokens": 0,
-                    "total_tokens": 0, "input_cost": 0, "output_cost": 0,
-                    "total_cost": 0, "duration_ms_sum": 0,
-                    "duration_ms_min": None, "duration_ms_max": None,
-                }
-            b = daily_buckets[key]
-            b["call_count"] += h.call_count
-            b["input_tokens"] += h.input_tokens
-            b["output_tokens"] += h.output_tokens
-            b["total_tokens"] += h.total_tokens
-            b["input_cost"] += h.input_cost or 0
-            b["output_cost"] += h.output_cost or 0
-            b["total_cost"] += h.total_cost
-            b["duration_ms_sum"] += h.duration_ms_sum or 0
-            if h.min_duration_ms is not None:
-                if b["duration_ms_min"] is None or h.min_duration_ms < b["duration_ms_min"]:
-                    b["duration_ms_min"] = h.min_duration_ms
-            if h.max_duration_ms is not None:
-                if b["duration_ms_max"] is None or h.max_duration_ms > b["duration_ms_max"]:
-                    b["duration_ms_max"] = h.max_duration_ms
-
-        # Upsert daily aggregates
-        from orchestrator.core.write_queue import enqueue, AggregationItem
-
-        agg_rows = []
-        for (app_id, team_id, provider, model, resource_type, day_start), b in daily_buckets.items():
-            avg_dur = b["duration_ms_sum"] // b["call_count"] if b["call_count"] > 0 else None
-            agg_rows.append(dict(
-                id=str(_uuid_mod.uuid4()),
-                app_id=app_id,
-                team_id=team_id,
-                provider=provider,
-                model=model,
-                resource_type=resource_type,
-                granularity="daily",
-                period_start=day_start,
-                period_end=day_start + timedelta(days=1),
-                call_count=b["call_count"],
-                input_tokens=b["input_tokens"],
-                output_tokens=b["output_tokens"],
-                total_tokens=b["total_tokens"],
-                input_cost=b["input_cost"],
-                output_cost=b["output_cost"],
-                total_cost=b["total_cost"],
-                avg_duration_ms=avg_dur,
-                min_duration_ms=b["duration_ms_min"],
-                max_duration_ms=b["duration_ms_max"],
-                duration_ms_sum=b["duration_ms_sum"],
-                source="compaction",
-            ))
-
-        if agg_rows:
-            await enqueue(AggregationItem(rows=agg_rows, granularity="daily"))
-
-        # Delete the compacted hourly aggregates
-        if hourly_ids:
-            await db.execute(
-                delete(UsageAggregate).where(UsageAggregate.id.in_(hourly_ids))
-            )
+    pruned = 0
+    days = 0
+    filled = 0
+    while True:
+        async with _session_factory() as db:
+            day = await oldest_hourly_day(db, cutoff_day)
+            if day is None:
+                break
+            res = await reconcile_daily(db, [day], prune_hourly=True)
             await db.commit()
+        days += 1
+        pruned += res.hourly_rows_pruned
+        filled += res.keys_repaired
+        if res.hourly_rows_pruned == 0:
+            # Defensive: never spin if a delete removed nothing.
+            break
 
+    if days:
         logger.info(
-            "Hourly→daily compaction complete",
-            extra={"hourlies_compacted": len(hourly_ids), "daily_buckets": len(daily_buckets)},
+            "Hourly aggregate retention complete",
+            extra={"days": days, "hourly_rows_pruned": pruned, "daily_keys_filled": filled},
         )

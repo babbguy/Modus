@@ -113,7 +113,7 @@ async def list_thresholds(
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> list[ThresholdResponse]:
     identity.assert_permission("thresholds:read")
     q = select(Threshold).where(Threshold.is_active == True)
@@ -139,7 +139,7 @@ async def create_threshold(
     body: ThresholdCreate,
     request: Request,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> ThresholdResponse:
     identity.assert_permission("thresholds:write")
     identity.assert_team_access(body.team_id)
@@ -164,7 +164,7 @@ async def delete_threshold(
     threshold_id: str,
     request: Request,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> None:
     identity.assert_permission("thresholds:delete")
     t = await db.get(Threshold, threshold_id)
@@ -184,7 +184,7 @@ async def update_threshold(
     body: ThresholdUpdate,
     request: Request,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> ThresholdResponse:
     identity.assert_permission("thresholds:write")
     t = await db.get(Threshold, threshold_id)
