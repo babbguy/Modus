@@ -316,7 +316,7 @@ async def _detail(db: AsyncSession, team: Team) -> TeamDetailResponse:
 @router.get("/teams/departments", tags=["teams"])
 async def list_departments(
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> list[dict]:
     """Return distinct department names with team counts."""
     identity.assert_permission("teams:read")
@@ -337,7 +337,7 @@ async def list_teams(
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> list[TeamResponse]:
     identity.assert_permission("teams:read")
     if include_deleted and not identity.is_platform_admin:
@@ -375,7 +375,7 @@ async def list_teams(
 async def get_team(
     team_id: str,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> TeamDetailResponse:
     identity.assert_permission("teams:read")
     team = await _get_live_team(db, team_id)
@@ -390,7 +390,7 @@ async def create_team(
     body: TeamCreateRequest,
     request: Request,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> TeamResponse:
     identity.assert_permission("teams:write")
     owner = await _slug_owner(db, body.slug)
@@ -426,7 +426,7 @@ async def update_team(
     body: TeamUpdateRequest,
     request: Request,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> TeamDetailResponse:
     identity.assert_permission("teams:write")
     team = await _get_live_team(db, team_id)
@@ -502,7 +502,7 @@ async def delete_team(
     cascade: bool = Query(False, description="Deactivate (soft-delete) this team's apps; their API keys stop working."),
     reassign_children_to: Optional[str] = Query(None, description="Re-parent child teams under this team."),
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> TeamDeleteResult:
     """Soft-delete a team. Usage, cost and audit history is never removed.
 
@@ -646,7 +646,7 @@ async def restore_team(
     team_id: str,
     request: Request,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> TeamRestoreResult:
     """Undo a soft delete. Apps that were deactivated or moved are NOT
     brought back, and the registration token stays revoked (generate a new one)."""

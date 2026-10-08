@@ -463,7 +463,7 @@ def _anthropic_error(decision: str, reason: str) -> Response:
 @router.post("/openai/v1/chat/completions")
 async def openai_chat_completions(
     request: Request,
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Governed proxy for OpenAI chat completions (streaming + non-streaming)."""
     app = await _resolve_app(request, db)
@@ -667,7 +667,7 @@ async def _stream_openai(app, url, headers, body, model, span_meta, start,
 @router.post("/openai/v1/embeddings")
 async def openai_embeddings(
     request: Request,
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Governed proxy for OpenAI embeddings."""
     app = await _resolve_app(request, db)
@@ -723,7 +723,7 @@ async def openai_embeddings(
 @router.post("/anthropic/v1/messages")
 async def anthropic_messages(
     request: Request,
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Governed proxy for Anthropic messages (streaming + non-streaming)."""
     app = await _resolve_app(request, db)
@@ -925,7 +925,7 @@ async def _stream_anthropic(app, url, headers, body, model, span_meta, start,
 async def openai_passthrough(
     path: str,
     request: Request,
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Passthrough for non-governed OpenAI endpoints (e.g. /v1/models)."""
     await _resolve_app(request, db)  # auth only, no governance
@@ -941,7 +941,7 @@ async def openai_passthrough(
 async def anthropic_passthrough(
     path: str,
     request: Request,
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Passthrough for non-governed Anthropic endpoints."""
     await _resolve_app(request, db)

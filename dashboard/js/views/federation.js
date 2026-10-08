@@ -110,11 +110,11 @@ function _normalizePeer(p) {
   return {
     ...p,
     status: status === 'active' ? 'connected' : status,
-    peer_url: p.peer_url || p.peer_url_masked || '',
-    last_heartbeat: p.last_heartbeat || p.last_heartbeat_at || null,
-    latency_ms: p.latency_ms != null ? p.latency_ms : (p.last_heartbeat_latency_ms ?? null),
-    team: p.team || p.team_slug || p.team_id || null,
-    sync_history: p.sync_history || [],
+    peer_url: p.peer_url_masked || '',
+    last_heartbeat: p.last_heartbeat_at || null,
+    latency_ms: p.last_heartbeat_latency_ms ?? null,
+    team: p.team_slug || p.team_id || null,
+    sync_history: [],
   };
 }
 
@@ -277,7 +277,7 @@ function _renderPeerCard(peer, idx) {
   const statusBadge = _statusBadge(status);
   const lastHb = peer.last_heartbeat ? timeSince(peer.last_heartbeat) : 'never';
   const latency = peer.latency_ms != null ? `${peer.latency_ms}ms` : '\u2014';
-  const peerUrl = peer.peer_url || peer.url || '';
+  const peerUrl = peer.peer_url || '';
   const isPaused = status === 'paused';
   const pauseIcon = isPaused ? 'fa-play' : 'fa-pause';
   const pauseTitle = isPaused ? 'Resume' : 'Pause';

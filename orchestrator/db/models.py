@@ -23,7 +23,7 @@ Design principles:
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
@@ -95,6 +95,41 @@ class UUID(TypeDecorator):
             return str(uuid.UUID(str(value)))
         except ValueError:
             return str(value)
+
+
+class UTCDateTime(TypeDecorator):
+    """Timezone-aware UTC ``datetime`` column.
+
+    PostgreSQL stores ``TIMESTAMP WITH TIME ZONE`` and already returns aware
+    values. SQLite has no timestamp type: SQLAlchemy stores naive text and hands
+    back *naive* datetimes, which then serialise to JSON without an offset
+    (``2026-04-01T10:00:00``). Browsers parse such strings as LOCAL time, so
+    every relative time in the dashboard was off by the viewer's UTC offset.
+
+    This type makes both dialects behave the same way: values read from the
+    database are always aware UTC, and aware values written are normalised to
+    UTC first (a naive value is taken to already be UTC). API responses built
+    from ORM rows therefore serialise as ``...Z`` / ``+00:00`` everywhere.
+    """
+
+    impl = DateTime(timezone=True)
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        if value is None or not isinstance(value, datetime):
+            return value
+        if value.tzinfo is None:
+            # Naive input is taken to be UTC already.
+            return value.replace(tzinfo=timezone.utc) if dialect.name == "postgresql" else value
+        value = value.astimezone(timezone.utc)
+        return value if dialect.name == "postgresql" else value.replace(tzinfo=None)
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
 
 
 class Base(DeclarativeBase):
@@ -173,14 +208,14 @@ class Team(Base):
 
     # Soft delete — preserves audit trail
     deleted_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
+        UTCDateTime(), nullable=True
     )
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
+        UTCDateTime(),
         server_default=func.now(),
         onupdate=func.now(),
         nullable=False,
@@ -253,15 +288,15 @@ class App(Base):
     # e.g. {"openai": "1.12.0", "anthropic": "0.20.0", "boto3": "1.34.0"}
 
     last_seen_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
+        UTCDateTime(), nullable=True
     )
     first_seen_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
+        UTCDateTime(), nullable=True
     )
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     deleted_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
+        UTCDateTime(), nullable=True
     )
 
     # ── Enforcement state ──────────────────────────────────────────────────────
@@ -287,17 +322,17 @@ class App(Base):
         String(32), nullable=False, default="active"
     )
     enforcement_suspended_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
+        UTCDateTime(), nullable=True
     )
     enforcement_suspended_reason: Mapped[Optional[str]] = mapped_column(
         String(512), nullable=True
     )
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
+        UTCDateTime(),
         server_default=func.now(),
         onupdate=func.now(),
         nullable=False,
@@ -393,12 +428,12 @@ class UsageRecord(Base):
     # Timing
     duration_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     timestamp: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
+        UTCDateTime(), nullable=False
     )
     # Timestamp of the actual API call, not when it was ingested
 
     ingested_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
 
     # Extended metadata — provider-specific fields, custom tags
@@ -465,10 +500,10 @@ class UsageAggregate(Base):
     # "hourly" | "daily" | "monthly"
 
     period_start: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
+        UTCDateTime(), nullable=False
     )
     period_end: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
+        UTCDateTime(), nullable=False
     )
 
     call_count: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
@@ -494,7 +529,7 @@ class UsageAggregate(Base):
     source: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
 
     computed_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
 
     app: Mapped[App] = relationship(back_populates="aggregates")
@@ -573,10 +608,10 @@ class Threshold(Base):
     # e.g. {"slack": "#cost-alerts", "email": ["team@org.com"], "webhook": "https://..."}
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
+        UTCDateTime(),
         server_default=func.now(),
         onupdate=func.now(),
         nullable=False,
@@ -620,17 +655,17 @@ class Alert(Base):
     threshold_value: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False)
     actual_value: Mapped[Decimal] = mapped_column(Numeric(18, 8), nullable=False)
     period_start: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
+        UTCDateTime(), nullable=False
     )
     period_end: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
+        UTCDateTime(), nullable=False
     )
 
     fired_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
     acknowledged_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
+        UTCDateTime(), nullable=True
     )
     acknowledged_by: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
 
@@ -684,10 +719,10 @@ class NotificationDelivery(Base):
         JSONB().with_variant(JSON(), "sqlite"), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
+        UTCDateTime(),
         server_default=func.now(), onupdate=func.now(), nullable=False,
     )
 
@@ -727,7 +762,7 @@ class AgentHeartbeat(Base):
     # e.g. {"runtime": "lambda", "region": "us-east-1", "python": "3.11.4"}
 
     received_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
 
     app: Mapped[App] = relationship(back_populates="heartbeats")
@@ -805,10 +840,10 @@ class PricingOverride(Base):
     )
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
+        UTCDateTime(),
         server_default=func.now(),
         onupdate=func.now(),
         nullable=False,
@@ -855,17 +890,17 @@ class PricingModel(Base):
     currency: Mapped[str] = mapped_column(String(8), nullable=False, default="USD")
 
     effective_from: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
+        UTCDateTime(), nullable=False
     )
     effective_until: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
+        UTCDateTime(), nullable=True
     )
 
     source: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
     # e.g. "anthropic_pricing_page_2024_01" — for audit trail
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
 
 
@@ -917,7 +952,7 @@ class AuditLog(Base):
     )
 
     occurred_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
 
     # ── Tamper-evidence: global hash chain ────────────────────────────────────
@@ -962,7 +997,7 @@ class AuditCheckpoint(Base):
     signature: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
     public_key_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
 
 
@@ -981,7 +1016,7 @@ class HashChainState(Base):
     last_seq: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     last_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
 
 
@@ -1006,7 +1041,7 @@ class IngestBatch(Base):
     )
     record_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     received_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
 
 # ── Governance Policies ────────────────────────────────────────────────────────
@@ -1115,10 +1150,10 @@ class GovernancePolicy(Base):
 
     created_by: Mapped[str] = mapped_column(String(256), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
+        UTCDateTime(),
         server_default=func.now(),
         onupdate=func.now(),
         nullable=False,
@@ -1194,7 +1229,7 @@ class PolicyDecision(Base):
     evaluation_latency_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     decided_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
 
     policy: Mapped[Optional[GovernancePolicy]] = relationship(
@@ -1252,10 +1287,10 @@ class RealTimeSpend(Base):
     # "hourly:2026-03-02T14" | "daily:2026-03-02" | "monthly:2026-03"
 
     window_start: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
+        UTCDateTime(), nullable=False
     )
     window_end: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
+        UTCDateTime(), nullable=False
     )
 
     total_cost: Mapped[Decimal] = mapped_column(
@@ -1281,7 +1316,7 @@ class RealTimeSpend(Base):
     )
 
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
 
     def __repr__(self) -> str:
@@ -1330,11 +1365,11 @@ class SessionBudget(Base):
         comment="Running spend total, updated atomically on each /evaluate allow.",
     )
     reset_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True,
+        UTCDateTime(), nullable=True,
         comment="Optional: auto-reset spend at this time.",
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
 
     def __repr__(self) -> str:
@@ -1433,7 +1468,7 @@ class AppTopology(Base):
     # AI-generated summary
     ai_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     ai_summary_generated_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
+        UTCDateTime(), nullable=True
     )
 
     # Hash of raw_snapshot — used to detect meaningful changes
@@ -1445,10 +1480,10 @@ class AppTopology(Base):
     )
 
     first_seen_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), onupdate=func.now(), nullable=False
     )
 
     def __repr__(self) -> str:
@@ -1476,7 +1511,7 @@ class SystemSetting(Base):
     updated_by: Mapped[str] = mapped_column(String(128), nullable=False,
                                              server_default="system")
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
 
     def as_int(self, default: int = 0) -> int:
@@ -1525,14 +1560,14 @@ class AnomalyEvent(Base):
                                                server_default="1")
     ai_explanation: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     detected_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
     acknowledged_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
+        UTCDateTime(), nullable=True
     )
     acknowledged_by: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     resolved_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
+        UTCDateTime(), nullable=True
     )
     metadata_: Mapped[Optional[dict]] = mapped_column(
         "metadata", JSONB().with_variant(JSON(), "sqlite"), nullable=True
@@ -1576,7 +1611,7 @@ class SpendForecast(Base):
     basis_days: Mapped[int] = mapped_column(Integer, nullable=False,
                                              server_default="28")
     computed_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
 
     __table_args__ = (
@@ -1618,13 +1653,13 @@ class OptimizationRecommendation(Base):
                                              server_default="medium")
     recommendation_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     generated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
     dismissed_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
+        UTCDateTime(), nullable=True
     )
     applied_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
+        UTCDateTime(), nullable=True
     )
 
     __table_args__ = (
@@ -1712,7 +1747,7 @@ class RoutingFingerprint(Base):
         LargeBinary, nullable=True
     )
     rolling_centroid_updated_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
+        UTCDateTime(), nullable=True
     )
 
     # JSON centroid columns — multi-dimensional feature vectors
@@ -1761,10 +1796,10 @@ class RoutingFingerprint(Base):
     )
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(),
+        UTCDateTime(), server_default=func.now(), onupdate=func.now(),
         nullable=False
     )
 
@@ -1869,7 +1904,7 @@ class RoutingOutcome(Base):
     # 'table' | 'generic' | 'none' — routing decision source
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
 
     __table_args__ = (
@@ -1921,10 +1956,10 @@ class RbacRole(Base):
     )
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(),
+        UTCDateTime(), server_default=func.now(),
         onupdate=func.now(), nullable=False
     )
 
@@ -1966,7 +2001,7 @@ class RbacAssignment(Base):
     assigned_by: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
 
     role: Mapped[RbacRole] = relationship(back_populates="assignments")
@@ -2005,13 +2040,13 @@ class User(Base):
         Boolean, nullable=False, server_default=true()
     )
     last_login_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
+        UTCDateTime(), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(),
+        UTCDateTime(), server_default=func.now(),
         onupdate=func.now(), nullable=False
     )
 
@@ -2066,7 +2101,7 @@ class TeamMembership(Base):
         UUID(as_uuid=False), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
 
     user: Mapped[User] = relationship(back_populates="memberships")
@@ -2120,7 +2155,7 @@ class UserPreference(Base):
         comment="UI theme: light|dark|system",
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(),
+        UTCDateTime(), server_default=func.now(),
         onupdate=func.now(), nullable=False
     )
 
@@ -2176,13 +2211,13 @@ class Invitation(Base):
         comment="pending|accepted|expired|revoked",
     )
     expires_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
+        UTCDateTime(), nullable=False
     )
     accepted_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
+        UTCDateTime(), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
 
     role: Mapped[RbacRole] = relationship()
@@ -2245,10 +2280,10 @@ class CostCenter(Base):
         Boolean, server_default=true(), nullable=False
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(),
+        UTCDateTime(), server_default=func.now(),
         onupdate=func.now(), nullable=False,
     )
 
@@ -2288,7 +2323,7 @@ class TeamCostCenter(Base):
         comment="Percentage of this team's cost allocated to this cost-center (for split billing)",
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
 
     cost_center: Mapped[CostCenter] = relationship(back_populates="teams")
@@ -2313,10 +2348,10 @@ class ChargebackInvoice(Base):
         comment="Cost-center this invoice covers. NULL = org-wide.",
     )
     period_start: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
+        UTCDateTime(), nullable=False
     )
     period_end: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
+        UTCDateTime(), nullable=False
     )
     total_cost_usd: Mapped[Decimal] = mapped_column(
         Numeric(18, 8), nullable=False
@@ -2342,7 +2377,7 @@ class ChargebackInvoice(Base):
         comment="User or system that triggered generation",
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
 
     def __repr__(self) -> str:
@@ -2392,16 +2427,16 @@ class FinanceReport(Base):
         Boolean, server_default=true(), nullable=False
     )
     last_run_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
+        UTCDateTime(), nullable=True
     )
     created_by: Mapped[Optional[str]] = mapped_column(
         String(256), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(),
+        UTCDateTime(), server_default=func.now(),
         onupdate=func.now(), nullable=False,
     )
 
@@ -2446,10 +2481,10 @@ class ForecastConfig(Base):
         String(256), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(),
+        UTCDateTime(), server_default=func.now(),
         onupdate=func.now(), nullable=False,
     )
 
@@ -2478,10 +2513,10 @@ class BillingActual(Base):
         comment="Specific service (e.g. 'Amazon Bedrock', 'OpenAI API')",
     )
     period_start: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
+        UTCDateTime(), nullable=False
     )
     period_end: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
+        UTCDateTime(), nullable=False
     )
     actual_cost_usd: Mapped[Decimal] = mapped_column(
         Numeric(18, 8), nullable=False
@@ -2503,10 +2538,10 @@ class BillingActual(Base):
         comment="Original invoice line item data from the provider",
     )
     reconciled_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
+        UTCDateTime(), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
 
     __table_args__ = (
@@ -2554,10 +2589,10 @@ class ScenarioConfig(Base):
         String(256), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(),
+        UTCDateTime(), server_default=func.now(),
         onupdate=func.now(), nullable=False,
     )
 
@@ -2605,7 +2640,7 @@ class BillingConnection(Base):
         String(16), nullable=False, server_default="pending"
     )
     last_sync_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
+        UTCDateTime(), nullable=True
     )
     last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     sync_schedule: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
@@ -2618,10 +2653,10 @@ class BillingConnection(Base):
 
     created_by: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(),
+        UTCDateTime(), server_default=func.now(),
         onupdate=func.now(), nullable=False,
     )
 
@@ -2652,10 +2687,10 @@ class NotificationChannelConfig(Base):
     )
     updated_by: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(),
+        UTCDateTime(), server_default=func.now(),
         onupdate=func.now(), nullable=False,
     )
 
@@ -2731,16 +2766,16 @@ class AttributionSession(Base):
     )
 
     started_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
+        UTCDateTime(), nullable=True
     )
     ended_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
+        UTCDateTime(), nullable=True
     )
     processed_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
+        UTCDateTime(), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
 
     def __repr__(self) -> str:
@@ -2826,7 +2861,7 @@ class AttributionNode(Base):
     )
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
 
     def __repr__(self) -> str:
@@ -2911,18 +2946,18 @@ class GovernanceProposal(Base):
     )
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
     applied_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
+        UTCDateTime(), nullable=True
     )
     applied_by: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
     dismissed_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True
+        UTCDateTime(), nullable=True
     )
     dismissed_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     expires_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True,
+        UTCDateTime(), nullable=True,
         comment="Auto-expire stale proposals.",
     )
 
@@ -2982,7 +3017,7 @@ class RewindEvent(Base):
     )
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        UTCDateTime(), server_default=func.now(), nullable=False
     )
 
     def __repr__(self) -> str:
@@ -3058,7 +3093,7 @@ class SessionFingerprint(Base):
     )
 
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False,
+        UTCDateTime(), server_default=func.now(), nullable=False,
         onupdate=func.now(),
     )
 
@@ -3118,7 +3153,7 @@ class TrajectoryDecision(Base):
     )
 
     computed_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False,
+        UTCDateTime(), server_default=func.now(), nullable=False,
     )
 
     def __repr__(self) -> str:
@@ -3190,7 +3225,7 @@ class EnforcementAttestation(Base):
     )
 
     verified_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True,
+        UTCDateTime(), nullable=True,
     )
     verified_by: Mapped[Optional[str]] = mapped_column(
         String(256), nullable=True,
@@ -3215,7 +3250,7 @@ class EnforcementAttestation(Base):
     )
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False,
+        UTCDateTime(), server_default=func.now(), nullable=False,
     )
 
     def __repr__(self) -> str:
@@ -3251,14 +3286,14 @@ class MerkleRoot(Base):
         Integer, nullable=False,
     )
     period_start: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False,
+        UTCDateTime(), nullable=False,
     )
     period_end: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False,
+        UTCDateTime(), nullable=False,
     )
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False,
+        UTCDateTime(), server_default=func.now(), nullable=False,
     )
 
     def __repr__(self) -> str:
@@ -3318,7 +3353,7 @@ class PolicyProof(Base):
     )
 
     proven_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False,
+        UTCDateTime(), server_default=func.now(), nullable=False,
     )
 
     def __repr__(self) -> str:
@@ -3353,7 +3388,7 @@ class PQCMigrationLog(Base):
     old_signature: Mapped[str] = mapped_column(Text, nullable=False)
     new_signature: Mapped[str] = mapped_column(Text, nullable=False)
     migrated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False,
+        UTCDateTime(), server_default=func.now(), nullable=False,
     )
 
 
@@ -3415,10 +3450,10 @@ class TrajectoryProof(Base):
         Integer, nullable=False, server_default="0",
     )
     verified_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True,
+        UTCDateTime(), nullable=True,
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False,
+        UTCDateTime(), server_default=func.now(), nullable=False,
     )
 
     def __repr__(self) -> str:
@@ -3484,7 +3519,7 @@ class TRiSMThreatEvent(Base):
         nullable=True,
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False,
+        UTCDateTime(), server_default=func.now(), nullable=False,
     )
 
     def __repr__(self) -> str:
@@ -3527,10 +3562,10 @@ class TRiSMPattern(Base):
         Integer, nullable=False, server_default="1",
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False,
+        UTCDateTime(), server_default=func.now(), nullable=False,
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(),
+        UTCDateTime(), server_default=func.now(),
         onupdate=func.now(), nullable=False,
     )
 
@@ -3576,7 +3611,7 @@ class EvolutionGeneration(Base):
         Integer, nullable=False, server_default="0",
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False,
+        UTCDateTime(), server_default=func.now(), nullable=False,
     )
 
     def __repr__(self) -> str:
@@ -3626,7 +3661,7 @@ class EvolutionProposal(Base):
         String(256), nullable=True,
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False,
+        UTCDateTime(), server_default=func.now(), nullable=False,
     )
 
 
@@ -3675,13 +3710,13 @@ class NeuromorphicMetrics(Base):
         comment="software, loihi, speck, none",
     )
     period_start: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False,
+        UTCDateTime(), nullable=False,
     )
     period_end: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False,
+        UTCDateTime(), nullable=False,
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False,
+        UTCDateTime(), server_default=func.now(), nullable=False,
     )
 
 
@@ -3745,7 +3780,7 @@ class PoELedgerEntry(Base):
         String(16), nullable=False, server_default="medium",
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False,
+        UTCDateTime(), server_default=func.now(), nullable=False,
     )
 
 
@@ -3775,7 +3810,7 @@ class PoEMerkleAnchor(Base):
         UUID(as_uuid=False), nullable=True,
     )
     anchored_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False,
+        UTCDateTime(), server_default=func.now(), nullable=False,
     )
 
 
@@ -3876,7 +3911,7 @@ class CoTLedgerEntry(Base):
 
     # ── Timestamp ──────────────────────────────────────────────────────────
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False,
+        UTCDateTime(), server_default=func.now(), nullable=False,
     )
 
 
@@ -3923,7 +3958,7 @@ class NeuroAssuranceMetric(Base):
         String(16), nullable=False, server_default="software",
     )
     recorded_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False,
+        UTCDateTime(), server_default=func.now(), nullable=False,
     )
 
 
@@ -3948,10 +3983,10 @@ class NeuroComplianceReport(Base):
     )
     content: Mapped[str] = mapped_column(Text, nullable=False)
     metric_count: Mapped[int] = mapped_column(Integer, nullable=False)
-    from_ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    to_ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    from_ts: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    to_ts: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
     generated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False,
+        UTCDateTime(), server_default=func.now(), nullable=False,
     )
 
 
@@ -3977,10 +4012,10 @@ class FederationConsent(Base):
     )
     consented_by: Mapped[str] = mapped_column(String(256), nullable=False)
     consented_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False,
+        UTCDateTime(), server_default=func.now(), nullable=False,
     )
     withdrawn_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True,
+        UTCDateTime(), nullable=True,
     )
     instance_nonce_key: Mapped[str] = mapped_column(
         String(64), nullable=False,
@@ -4011,7 +4046,7 @@ class FederationSyncLog(Base):
     generation_to: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     synced_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False,
+        UTCDateTime(), server_default=func.now(), nullable=False,
     )
 
 
@@ -4033,7 +4068,7 @@ class FederationMergedResult(Base):
     )
     confidence_score: Mapped[float] = mapped_column(Float, nullable=False)
     received_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False,
+        UTCDateTime(), server_default=func.now(), nullable=False,
     )
 
 
@@ -4051,13 +4086,13 @@ class ConsortiumPeer(Base):
     )
     peer_alias: Mapped[str] = mapped_column(String(128), nullable=False)
     last_sync_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True,
+        UTCDateTime(), nullable=True,
     )
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=true(),
     )
     registered_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False,
+        UTCDateTime(), server_default=func.now(), nullable=False,
     )
 
 
@@ -4093,13 +4128,13 @@ class FederationPeer(Base):
         comment="active | paused | error | unreachable",
     )
     last_heartbeat_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True,
+        UTCDateTime(), nullable=True,
     )
     last_heartbeat_latency_ms: Mapped[Optional[int]] = mapped_column(
         Integer, nullable=True,
     )
     last_sync_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True,
+        UTCDateTime(), nullable=True,
     )
     last_sync_status: Mapped[Optional[str]] = mapped_column(
         String(16), nullable=True,
@@ -4111,10 +4146,10 @@ class FederationPeer(Base):
         comment="Aggregate metrics from peer.",
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False,
+        UTCDateTime(), server_default=func.now(), nullable=False,
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False,
+        UTCDateTime(), server_default=func.now(), nullable=False,
     )
 
 
@@ -4146,7 +4181,7 @@ class FederationPeerSyncLog(Base):
     )
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     synced_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False,
+        UTCDateTime(), server_default=func.now(), nullable=False,
     )
 
 
@@ -4187,10 +4222,10 @@ class SwarmConfig(Base):
         Boolean, nullable=False, server_default=true(),
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False,
+        UTCDateTime(), server_default=func.now(), nullable=False,
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(),
+        UTCDateTime(), server_default=func.now(), onupdate=func.now(),
         nullable=False,
     )
 
@@ -4229,13 +4264,13 @@ class SwarmSession(Base):
         JSONB().with_variant(JSON(), "sqlite"), nullable=True,
     )
     expires_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False,
+        UTCDateTime(), nullable=False,
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False,
+        UTCDateTime(), server_default=func.now(), nullable=False,
     )
     completed_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True,
+        UTCDateTime(), nullable=True,
     )
 
 
@@ -4262,7 +4297,7 @@ class SwarmContribution(Base):
         comment="Fernet-encrypted Shamir share.",
     )
     submitted_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False,
+        UTCDateTime(), server_default=func.now(), nullable=False,
     )
 
 
@@ -4304,7 +4339,7 @@ class PolicyDecisionRecord(Base):
     mpc_proof: Mapped[str] = mapped_column(Text, nullable=False)
     attestation_signature: Mapped[str] = mapped_column(String(256), nullable=False)
     issued_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False,
+        UTCDateTime(), server_default=func.now(), nullable=False,
     )
 
 
@@ -4343,7 +4378,7 @@ class PQCReadinessScore(Base):
         comment="JSON array of recommended actions",
     )
     assessed_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False,
+        UTCDateTime(), server_default=func.now(), nullable=False,
     )
 
 
@@ -4385,7 +4420,7 @@ class HNDLRiskAssessment(Base):
         comment="allowed | warned | degraded | blocked",
     )
     assessed_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False,
+        UTCDateTime(), server_default=func.now(), nullable=False,
     )
 
 
@@ -4426,11 +4461,11 @@ class AgentIdentity(Base):
         comment="Hash linking to platform root key chain",
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False,
+        UTCDateTime(), server_default=func.now(), nullable=False,
     )
     rotated_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True,
+        UTCDateTime(), nullable=True,
     )
     revoked_at: Mapped[Optional[datetime]] = mapped_column(
-        DateTime(timezone=True), nullable=True,
+        UTCDateTime(), nullable=True,
     )

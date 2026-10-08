@@ -147,7 +147,7 @@ async def list_fingerprints(
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     identity=Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> list[RoutingFingerprintResponse]:
     stmt = select(RoutingFingerprint)
     if app_id:
@@ -201,7 +201,7 @@ async def list_fingerprints(
 async def get_fingerprint(
     fingerprint_hash: str,
     identity=Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> RoutingFingerprintResponse:
     stmt = select(RoutingFingerprint).where(
         RoutingFingerprint.fingerprint_hash == fingerprint_hash
@@ -252,7 +252,7 @@ async def list_outcome_summaries(
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     identity=Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> list[RoutingOutcomeSummary]:
     since = datetime.now(timezone.utc) - timedelta(days=days)
 
@@ -312,7 +312,7 @@ async def list_outcome_summaries(
 )
 async def get_savings(
     identity=Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> RoutingSavingsResponse:
     # Aggregate from fingerprints
     fp_stmt = select(
@@ -354,7 +354,7 @@ async def get_savings(
 async def reset_fingerprint(
     fingerprint_hash: str,
     identity=Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> StatusResponse:
     stmt = select(RoutingFingerprint).where(
         RoutingFingerprint.fingerprint_hash == fingerprint_hash
@@ -383,7 +383,7 @@ async def reset_fingerprint(
 async def exclude_fingerprint(
     fingerprint_hash: str,
     identity=Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> StatusResponse:
     stmt = select(RoutingFingerprint).where(
         RoutingFingerprint.fingerprint_hash == fingerprint_hash
@@ -426,7 +426,7 @@ class RoutingSummaryResponse(BaseModel):
 async def get_routing_summary(
     app_id: Optional[UUID] = None,
     identity=Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> RoutingSummaryResponse:
     # Phase counts
     fp_filters = []
@@ -505,7 +505,7 @@ async def get_savings_over_time(
     days: int = Query(30, ge=1, le=90),
     app_id: Optional[UUID] = None,
     identity=Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> list[DailySavingsRow]:
     since = datetime.now(timezone.utc) - timedelta(days=days)
     filters = [RoutingOutcome.created_at > since]
@@ -559,7 +559,7 @@ async def patch_fingerprint(
     fingerprint_hash: str,
     body: FingerprintPatchIn,
     identity=Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> RoutingFingerprintResponse:
     stmt = select(RoutingFingerprint).where(
         RoutingFingerprint.fingerprint_hash == fingerprint_hash
@@ -622,7 +622,7 @@ async def patch_fingerprint(
 async def log_routing_outcome(
     body: RoutingOutcomeIn,
     _app_key: str = Depends(get_app_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> dict:
     """
     Receives routing outcome data from the SDK agent.
@@ -707,7 +707,7 @@ class BatchResponse(BaseModel):
 async def log_routing_outcomes_batch(
     body: RoutingOutcomeBatchIn,
     _app_key: str = Depends(get_app_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> BatchResponse:
     """
     Receives batched routing outcome data from the SDK agent flush cycle.

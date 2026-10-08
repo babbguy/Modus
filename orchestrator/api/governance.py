@@ -144,7 +144,7 @@ async def get_proposal(
 async def apply_proposal_endpoint(
     proposal_id: str,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Apply a governance proposal — creates a new GovernancePolicy."""
     proposal = await db.get(GovernanceProposal, proposal_id)
@@ -173,7 +173,7 @@ async def dismiss_proposal_endpoint(
     proposal_id: str,
     body: DismissRequest,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Dismiss a governance proposal with reason."""
     proposal = await db.get(GovernanceProposal, proposal_id)
@@ -234,7 +234,7 @@ async def get_governance_stats(
 async def create_rewind_event(
     body: RewindEventRequest,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """
     SDK posts failure context for experience distillation.

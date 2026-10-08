@@ -56,7 +56,14 @@ async def process_pending_sessions() -> int:
 
     async with _session_factory() as db:
         # Find sessions with records that have span metadata and are "complete"
-        # (last record older than SESSION_TIMEOUT) but not yet attributed
+        # (last record older than SESSION_TIMEOUT) but not yet attributed.
+        # Processed sessions are excluded in SQL: filtering them after the
+        # LIMIT starved new sessions once MAX_SESSIONS_PER_CYCLE sessions had
+        # been processed.
+        already_processed = select(AttributionSession.id).where(
+            AttributionSession.session_id == UsageRecord.session_id,
+            AttributionSession.status == "processed",
+        ).exists()
         result = await db.execute(
             select(
                 UsageRecord.session_id,
@@ -66,6 +73,7 @@ async def process_pending_sessions() -> int:
             ).where(
                 UsageRecord.session_id.isnot(None),
                 UsageRecord.session_id != "",
+                ~already_processed,
             ).group_by(
                 UsageRecord.session_id,
             ).having(
@@ -87,7 +95,10 @@ async def process_pending_sessions() -> int:
                 continue
 
             try:
-                await _process_session(db, session_id, row.first_seen, row.last_seen)
+                # SAVEPOINT: a failure in one session must not poison the
+                # transaction that commits the others.
+                async with db.begin_nested():
+                    await _process_session(db, session_id, row.first_seen, row.last_seen)
                 processed += 1
             except Exception:
                 logger.error("Attribution failed for session %s", session_id, exc_info=True)

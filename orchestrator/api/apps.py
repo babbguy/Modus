@@ -11,6 +11,7 @@ DELETE /api/v1/apps/{id}             — soft-delete an app (dashboard auth)
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import secrets
 import string
@@ -23,7 +24,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from orchestrator.core.auth import Identity, get_identity
+from orchestrator.core.auth import Identity, get_identity, team_scope_clause
 from orchestrator.core.config import settings
 from orchestrator.db.models import App, AuditLog, Team
 from orchestrator.db.session import get_session
@@ -107,6 +108,31 @@ class AppResponse(BaseModel):
     first_seen_at: Optional[datetime]
     is_active: bool
     created_at: datetime
+    # Runtime enforcement: active | budget_suspended | rate_limited | admin_suspended
+    enforcement_state: str = "active"
+    enforcement_suspended_at: Optional[datetime] = None
+    enforcement_suspended_reason: Optional[str] = None
+
+
+def _app_response(app: App, team_slug: Optional[str]) -> AppResponse:
+    return AppResponse(
+        id=str(app.id),
+        app_id=app.app_id,
+        app_name=app.app_name,
+        team_id=str(app.team_id),
+        team_slug=team_slug,
+        environment=app.environment,
+        api_key_prefix=app.api_key_prefix,
+        agent_version=app.agent_version,
+        sdk_versions=app.sdk_versions,
+        last_seen_at=app.last_seen_at,
+        first_seen_at=app.first_seen_at,
+        is_active=app.is_active,
+        created_at=app.created_at,
+        enforcement_state=app.enforcement_state or "active",
+        enforcement_suspended_at=app.enforcement_suspended_at,
+        enforcement_suspended_reason=app.enforcement_suspended_reason,
+    )
 
 
 class AppUpdateRequest(BaseModel):
@@ -133,7 +159,7 @@ _pending_lock = _threading.Lock()
 async def register_app(
     body: RegisterRequest,
     request: Request,
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> RegisterResponse:
     """
     Register a new application and issue an API key.
@@ -204,7 +230,7 @@ async def register_app(
     # Generate key upfront — returned to caller immediately
     import uuid as _uuid
     api_key = _generate_app_key()
-    api_key_hash = _hash_key(api_key)
+    api_key_hash = await asyncio.to_thread(_hash_key, api_key)
     api_key_prefix = api_key[:16]
     app_uuid = str(_uuid.uuid4())
 
@@ -267,7 +293,7 @@ async def register_app(
 async def rotate_key(
     app_uuid: str,
     request: Request,
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> RotateKeyResponse:
     """Rotate the API key for an app. Requires master key. Old key immediately invalid."""
     raw_key = _extract_raw_key(request)
@@ -283,7 +309,7 @@ async def rotate_key(
 
     old_prefix = app.api_key_prefix
     new_key = _generate_app_key()
-    app.api_key_hash = _hash_key(new_key)
+    app.api_key_hash = await asyncio.to_thread(_hash_key, new_key)
     app.api_key_prefix = new_key[:16]
 
     db.add(AuditLog(
@@ -318,7 +344,7 @@ async def list_apps(
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> list[AppResponse]:
     identity.assert_permission("apps:read")
     query = select(App, Team.slug).join(Team, App.team_id == Team.id).where(
@@ -329,11 +355,7 @@ async def list_apps(
         query = query.where(App.is_active == True)
 
     # Team scoping — enforced via identity
-    if not identity.is_platform_admin and identity.team_ids:
-        query = query.where(App.team_id.in_(identity.team_ids))
-    elif team_id:
-        identity.assert_team_access(team_id)
-        query = query.where(App.team_id == team_id)
+    query = query.where(team_scope_clause(App.team_id, identity.visible_team_ids(team_id)))
 
     if environment:
         query = query.where(App.environment == environment)
@@ -343,31 +365,14 @@ async def list_apps(
     )
     rows = result.all()
 
-    return [
-        AppResponse(
-            id=str(app.id),
-            app_id=app.app_id,
-            app_name=app.app_name,
-            team_id=str(app.team_id),
-            team_slug=team_slug,
-            environment=app.environment,
-            api_key_prefix=app.api_key_prefix,
-            agent_version=app.agent_version,
-            sdk_versions=app.sdk_versions,
-            last_seen_at=app.last_seen_at,
-            first_seen_at=app.first_seen_at,
-            is_active=app.is_active,
-            created_at=app.created_at,
-        )
-        for app, team_slug in rows
-    ]
+    return [_app_response(app, team_slug) for app, team_slug in rows]
 
 
 @router.get("/apps/{app_uuid}", response_model=AppResponse, summary="Get app detail")
 async def get_app(
     app_uuid: str,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> AppResponse:
     result = await db.execute(
         select(App, Team.slug).join(Team).where(
@@ -382,21 +387,7 @@ async def get_app(
     app, team_slug = row
     identity.assert_team_access(str(app.team_id))
 
-    return AppResponse(
-        id=str(app.id),
-        app_id=app.app_id,
-        app_name=app.app_name,
-        team_id=str(app.team_id),
-        team_slug=team_slug,
-        environment=app.environment,
-        api_key_prefix=app.api_key_prefix,
-        agent_version=app.agent_version,
-        sdk_versions=app.sdk_versions,
-        last_seen_at=app.last_seen_at,
-        first_seen_at=app.first_seen_at,
-        is_active=app.is_active,
-        created_at=app.created_at,
-    )
+    return _app_response(app, team_slug)
 
 
 @router.patch("/apps/{app_uuid}", response_model=AppResponse, summary="Update app")
@@ -405,7 +396,7 @@ async def update_app(
     body: AppUpdateRequest,
     request: Request,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> AppResponse:
     identity.assert_permission("apps:write")
 
@@ -441,13 +432,7 @@ async def update_app(
         after=body.model_dump(exclude_none=True),
     ))
 
-    return AppResponse(
-        id=str(app.id), app_id=app.app_id, app_name=app.app_name,
-        team_id=str(app.team_id), team_slug=team_slug, environment=app.environment,
-        api_key_prefix=app.api_key_prefix, agent_version=app.agent_version,
-        sdk_versions=app.sdk_versions, last_seen_at=app.last_seen_at,
-        first_seen_at=app.first_seen_at, is_active=app.is_active, created_at=app.created_at,
-    )
+    return _app_response(app, team_slug)
 
 
 @router.delete(
@@ -460,7 +445,7 @@ async def delete_app(
     app_uuid: str,
     request: Request,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> None:
     identity.assert_permission("apps:delete")
 

@@ -202,75 +202,71 @@ async def test_ingest_writes_to_db(e2e_session_factory, app_id, team_id):
 
 async def test_aggregation_produces_hourly_and_daily(e2e_engine, e2e_session_factory, app_id, team_id):
     """
-    Write raw records, run aggregation, verify hourly + daily aggregates created.
+    Ingest raw records through the writer: hourly + daily aggregates are
+    written in the same transaction. Running the aggregation cycle any number
+    of times afterwards must not change the totals.
     """
     now = datetime.now(timezone.utc)
-
-    # Seed raw records
-    async with e2e_session_factory() as db:
-        batch_id = str(uuid.uuid4())
-        db.add(IngestBatch(batch_id=batch_id, app_id=app_id, record_count=5))
-        for i in range(5):
-            db.add(UsageRecord(
-                app_id=app_id,
-                team_id=team_id,
-                provider="anthropic",
-                resource_type="llm",
-                model="claude-sonnet-4-20250514",
-                input_tokens=1000,
-                output_tokens=200,
-                total_cost=Decimal("0.005"),
-                duration_ms=300,
-                timestamp=now - timedelta(hours=i),
-                batch_id=batch_id,
-            ))
-        await db.commit()
-
-    # Run aggregation cycle
+    from orchestrator.core import write_queue as wq_mod
     from orchestrator.db import session as session_mod
     _prev = session_mod._session_factory
     session_mod._session_factory = e2e_session_factory
 
+    records = [
+        dict(
+            app_id=app_id,
+            team_id=team_id,
+            provider="anthropic",
+            resource_type="llm",
+            model="claude-sonnet-4-20250514",
+            input_tokens=1000,
+            output_tokens=200,
+            total_cost=Decimal("0.005"),
+            duration_ms=300,
+            timestamp=now - timedelta(minutes=i),
+            batch_id="e2e-agg-batch-0001",
+        )
+        for i in range(5)
+    ]
+
+    async def _totals():
+        async with e2e_session_factory() as db:
+            out = {}
+            for gran in ("hourly", "daily"):
+                rows = (await db.execute(
+                    select(UsageAggregate).where(
+                        UsageAggregate.app_id == app_id,
+                        UsageAggregate.granularity == gran,
+                    )
+                )).scalars().all()
+                out[gran] = (
+                    sum(r.call_count for r in rows),
+                    sum((r.total_cost for r in rows), Decimal("0")),
+                )
+            return out
+
     try:
-        # Start write queue so aggregation items can be enqueued and flushed
-        from orchestrator.core import write_queue as wq_mod
+        await wq_mod._flush_batch([wq_mod.IngestItem(
+            app_id=app_id, team_id=team_id, batch_id="e2e-agg-batch-0001",
+            records=records, record_count=len(records),
+        )])
+        before = await _totals()
+
         await wq_mod.start_writer()
-
         from orchestrator.core.aggregator import run_aggregation_cycle
-        await run_aggregation_cycle()
-
-        # Give the writer time to flush
         import asyncio
-        await asyncio.sleep(0.5)
+        for _ in range(3):
+            await run_aggregation_cycle()
+            await asyncio.sleep(0.3)
         await wq_mod.stop_writer()
+        after = await _totals()
     finally:
         session_mod._session_factory = _prev
 
-    # Verify aggregates were created
-    async with e2e_session_factory() as db:
-        hourly = await db.execute(
-            select(UsageAggregate).where(
-                UsageAggregate.app_id == app_id,
-                UsageAggregate.granularity == "hourly",
-            )
-        )
-        hourly_rows = hourly.scalars().all()
-
-        daily = await db.execute(
-            select(UsageAggregate).where(
-                UsageAggregate.app_id == app_id,
-                UsageAggregate.granularity == "daily",
-            )
-        )
-        daily_rows = daily.scalars().all()
-
-        # Should have at least one hourly and one daily aggregate
-        assert len(hourly_rows) >= 1, f"Expected hourly aggregates, got {len(hourly_rows)}"
-        assert len(daily_rows) >= 1, f"Expected daily aggregates, got {len(daily_rows)}"
-
-        # Verify aggregate totals
-        total_hourly_cost = sum(float(r.total_cost) for r in hourly_rows)
-        assert total_hourly_cost > 0, "Hourly aggregates should have non-zero cost"
+    # Records may straddle an hour/day boundary, so compare sums, not rows.
+    assert before["hourly"] == (5, Decimal("0.025"))
+    assert before["daily"] == (5, Decimal("0.025"))
+    assert after == before, f"aggregation cycle changed totals: {before} -> {after}"
 
 
 async def test_security_headers_present(e2e_client):

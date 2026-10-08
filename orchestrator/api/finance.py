@@ -148,6 +148,9 @@ class FinanceSummaryResponse(BaseModel):
     top_spenders: list[dict]
     spend_by_department: list[dict]
     recent_invoices: list[dict]
+    # % change of month-to-date spend vs the same elapsed span of the prior
+    # month (one decimal, signed). None when the prior span has no spend.
+    cost_trend_pct: Optional[str] = None
 
 
 class BillingConnectionRequest(BaseModel):
@@ -205,7 +208,7 @@ def _project_eom(current_spend: Decimal, days_elapsed: int, days_in_month: int) 
 @router.get("/summary", response_model=FinanceSummaryResponse)
 async def finance_summary(
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Finance dashboard summary — all key metrics in one call."""
     now = datetime.now(timezone.utc)
@@ -281,6 +284,20 @@ async def finance_summary(
     top_list.sort(key=lambda x: Decimal(x["spend_usd"]), reverse=True)
     overall_burn = (total_spend / total_budget * 100) if total_budget > 0 else _ZERO
 
+    # Trend: MTD vs the same elapsed span of the previous month.
+    prior_start = (month_start - timedelta(days=1)).replace(day=1)
+    prior_end = min(prior_start + (now - month_start), month_start)
+    prior_result = await db.execute(spend_q, {"start": sqlite_dt(prior_start), "end": sqlite_dt(prior_end)})
+    visible_team_ids = {str(team.id) for team, _cc, _tcc in team_rows}
+    prior_spend = sum(
+        (Decimal(str(r.cost)) for r in prior_result.all() if r.cost and str(r.team_id) in visible_team_ids),
+        _ZERO,
+    )
+    cost_trend_pct = (
+        str(((total_spend - prior_spend) / prior_spend * 100).quantize(Decimal("0.1")))
+        if prior_spend > 0 else None
+    )
+
     # Recent invoices
     inv_result = await db.execute(
         select(ChargebackInvoice)
@@ -316,6 +333,7 @@ async def finance_summary(
             for dept, spend in sorted(dept_spend.items(), key=lambda x: x[1], reverse=True)
         ],
         recent_invoices=recent_invoices,
+        cost_trend_pct=cost_trend_pct,
     )
 
 
@@ -326,7 +344,7 @@ async def get_burn_rate(
     cost_center_id: Optional[str] = None,
     period: str = "current",  # "current" | "prior_month"
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Budget burn rate per team with EOM projection and risk classification.
 
@@ -428,7 +446,7 @@ async def get_burn_rate(
 @router.get("/cost-centers", response_model=list[CostCenterResponse])
 async def list_cost_centers(
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """List all cost centers with team counts and current spend."""
     now = datetime.now(timezone.utc)
@@ -484,7 +502,7 @@ async def list_cost_centers(
 async def create_cost_center(
     body: CostCenterRequest,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Create a new cost center."""
     if not identity.is_platform_admin:
@@ -530,7 +548,7 @@ async def create_cost_center(
 @router.get("/allocation")
 async def get_allocation(
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Cost allocation matrix: teams mapped to cost centers."""
     result = await db.execute(
@@ -557,7 +575,7 @@ async def get_allocation(
 async def set_allocation(
     body: AllocationRequest,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Map a team to a cost center (upserts)."""
     if not identity.is_platform_admin:
@@ -597,7 +615,7 @@ async def get_chargeback(
     period: Optional[str] = Query(None, description="Period: YYYY-MM, or omit for current month"),
     cost_center_id: Optional[str] = None,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Enhanced chargeback with cost-center grouping."""
     now = datetime.now(timezone.utc)
@@ -615,6 +633,8 @@ async def get_chargeback(
     else:
         period_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         period_end = now
+
+    period_label = period or period_start.strftime("%Y-%m")
 
     q = text("""
         SELECT
@@ -653,6 +673,7 @@ async def get_chargeback(
             "team_name": r.team_name,
             "cost_center_code": r.cost_center_code,
             "department": r.department,
+            "period": period_label,
             "app_name": r.app_name,
             "provider": r.provider,
             "model": r.model,
@@ -668,7 +689,7 @@ async def get_chargeback(
 async def generate_chargeback_invoice(
     body: ChargebackGenerateRequest,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Generate a chargeback invoice record."""
     if not identity.is_platform_admin:
@@ -745,7 +766,7 @@ async def generate_chargeback_invoice(
 @router.get("/scenarios", response_model=list[ScenarioResponse])
 async def list_scenarios(
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """List saved what-if scenarios."""
     result = await db.execute(
@@ -764,7 +785,7 @@ async def list_scenarios(
 async def run_scenario(
     body: ScenarioRequest,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """
     Run a what-if scenario against actual historical data.
@@ -954,7 +975,7 @@ async def get_reconciliation(
     provider: Optional[str] = None,
     limit: int = Query(50, ge=1, le=500),
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Billing reconciliation: what the provider billed vs what Modus tracked.
 
@@ -1058,7 +1079,7 @@ async def import_billing_actuals(
     body: BillingImportBody,
     request: Request,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Import provider invoice totals (JSON). Platform admin only.
 
@@ -1089,7 +1110,7 @@ async def import_billing_actuals_csv(
     file: UploadFile = File(...),
     source: Optional[str] = Form(None),
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Import provider invoice totals from a CSV upload. Platform admin only.
 
@@ -1123,7 +1144,7 @@ async def export_audit_trail(
     action: Optional[str] = None,
     limit: int = Query(500, ge=1, le=5000),
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Export audit trail for compliance (SOC 2, ISO 27001)."""
     if not identity.is_platform_admin:
@@ -1174,7 +1195,7 @@ async def export_audit_trail(
 @router.get("/connections", response_model=list[BillingConnectionResponse])
 async def list_connections(
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """List all billing provider connections."""
     result = await db.execute(
@@ -1204,7 +1225,7 @@ async def list_connections(
 async def create_connection(
     body: BillingConnectionRequest,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Create a new billing provider connection (platform admin only)."""
     if not identity.is_platform_admin:
@@ -1283,7 +1304,7 @@ async def create_connection(
 async def delete_connection(
     connection_id: str,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Delete a billing provider connection (platform admin only)."""
     if not identity.is_platform_admin:
@@ -1300,7 +1321,7 @@ async def delete_connection(
 async def test_connection(
     connection_id: str,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """
     Test a billing provider connection.
@@ -1332,7 +1353,7 @@ async def get_spend_trend(
     team_id: Optional[str] = None,
     provider: Optional[str] = None,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Daily spend time series for charts."""
     now = datetime.now(timezone.utc)
@@ -1504,7 +1525,7 @@ class BudgetBreachResponse(BaseModel):
 async def run_forecast(
     body: ForecastRequest,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """
     Three-tier spend forecast: built-in (OLS + Holt + seasonal), customer ML,
@@ -1704,7 +1725,7 @@ async def run_forecast(
 @router.get("/breach-predictions", response_model=list[BudgetBreachResponse])
 async def get_breach_predictions(
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """
     Predict budget breaches across ALL teams with budgets.
@@ -1782,7 +1803,7 @@ async def get_breach_predictions(
 @router.get("/forecast/config", response_model=list[ForecastConfigResponse])
 async def list_forecast_configs(
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """List all forecast configurations."""
 
@@ -1809,7 +1830,7 @@ async def list_forecast_configs(
 async def upsert_forecast_config(
     body: ForecastConfigRequest,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """
     Create or update forecast configuration for a team or org-wide.
@@ -1885,7 +1906,7 @@ async def upsert_forecast_config(
 async def delete_forecast_config(
     config_id: str,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Delete a forecast configuration."""
 
@@ -1904,7 +1925,7 @@ async def delete_forecast_config(
 async def simulate_price_impact(
     body: PriceImpactRequest,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """
     Simulate the impact of a provider price change on monthly spend.
@@ -1952,7 +1973,7 @@ class ReportResponse(BaseModel):
 @router.get("/reports", response_model=list[ReportResponse])
 async def list_reports(
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """List all scheduled finance reports."""
 
@@ -1976,7 +1997,7 @@ async def list_reports(
 async def create_report(
     body: ReportCreateRequest,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """
     Create a scheduled finance report.
@@ -2023,7 +2044,7 @@ async def create_report(
 async def delete_report(
     report_id: str,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Delete a scheduled report."""
 
@@ -2039,7 +2060,7 @@ async def delete_report(
 async def toggle_report(
     report_id: str,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Enable or disable a scheduled report."""
 
@@ -2057,7 +2078,7 @@ async def toggle_report(
 async def run_report_now(
     report_id: str,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Manually trigger a scheduled report immediately."""
     from orchestrator.core.report_scheduler import generate_and_deliver_report

@@ -113,6 +113,23 @@ class Identity:
             return True
         return team_id in self.team_ids
 
+    def visible_team_ids(self, requested: Optional[str] = None) -> Optional[list[str]]:
+        """Team ids a query may read, or ``None`` meaning "every team".
+
+        Platform admins (stub mode, the master key, real platform-admin users)
+        carry no team of their own and see all teams, optionally narrowed to
+        ``requested``. Every other identity is limited to ``team_ids`` -- an
+        empty list means *no* teams, not all of them -- and asking for a team
+        outside that set raises 403. Use this instead of comparing a column to
+        ``identity.team_id``, which is ``None`` for every admin identity.
+        """
+        if self.is_platform_admin:
+            return [requested] if requested else None
+        if requested:
+            self.assert_team_access(requested)
+            return [requested]
+        return list(self.team_ids)
+
     def assert_team_access(self, team_id: str) -> None:
         """Raise 403 if this identity cannot access the team."""
         if not self.can_access_team(team_id):
@@ -128,6 +145,19 @@ class Identity:
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Write access required.",
             )
+
+
+def team_scope_clause(column, teams: Optional[list[str]]):
+    """SQLAlchemy filter restricting ``column`` to ``teams``.
+
+    ``teams`` is the result of :meth:`Identity.visible_team_ids`: ``None`` means
+    "no restriction" (platform admin) and an empty list matches nothing.
+    """
+    from sqlalchemy import false, true
+
+    if teams is None:
+        return true()
+    return column.in_(teams) if teams else false()
 
 
 # ── Master-key service identity ──────────────────────────────────────────────

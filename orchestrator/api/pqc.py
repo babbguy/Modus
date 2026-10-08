@@ -49,6 +49,8 @@ class PQCScoreResponse(BaseModel):
     total_attestations: int
     pqc_signed: int
     migration_in_progress: bool
+    # Distinct post-quantum algorithms present on stored attestations
+    pqc_algorithms: list[str] = []
 
 
 class PQCVerifyRequest(BaseModel):
@@ -121,11 +123,20 @@ async def pqc_score(
 
     score = (pqc_signed / total * 100) if total > 0 else 100.0
 
+    algo_rows = await db.execute(
+        select(EnforcementAttestation.pqc_algorithm)
+        .where(EnforcementAttestation.pqc_signature.isnot(None))
+        .where(EnforcementAttestation.pqc_algorithm.isnot(None))
+        .distinct()
+    )
+    algorithms = sorted(str(r[0]) for r in algo_rows.all())
+
     return PQCScoreResponse(
         compliance_score=round(score, 2),
         total_attestations=total,
         pqc_signed=pqc_signed,
         migration_in_progress=False,
+        pqc_algorithms=algorithms,
     )
 
 
@@ -162,7 +173,7 @@ async def verify_pqc_attestation(
 @pqc_router.post("/migrate", response_model=PQCMigrateResponse)
 async def trigger_migration(
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Trigger PQC migration of existing attestations (admin only)."""
     if not identity.is_platform_admin:

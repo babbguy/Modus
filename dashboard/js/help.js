@@ -63,7 +63,7 @@ export const HELP_REGISTRY = {
   },
   'devops-anomalies': {
     title: 'Anomaly Detection',
-    body: 'AI cost or behavior that deviates from a 14-day rolling baseline. Z-score ≥ 3 = significant. Click any anomaly for details. The z-score scan requires PostgreSQL.',
+    body: 'AI cost or behavior that deviates from a 14-day rolling baseline. Z-score ≥ 3 = significant. Click any anomaly for details. The scan runs every 5 minutes on SQLite and PostgreSQL.',
   },
   'devops-recommend': {
     title: 'Model Optimization',

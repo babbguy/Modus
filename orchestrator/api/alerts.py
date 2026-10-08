@@ -38,7 +38,7 @@ async def list_alerts(
     unacknowledged_only: bool = False,
     limit: int = 50,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> list[AlertResponse]:
     identity.assert_permission("alerts:read")
     q = select(Alert)
@@ -74,7 +74,7 @@ async def acknowledge_alert(
     alert_id: str,
     request: Request,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> AcknowledgeResponse:
     identity.assert_permission("alerts:write")
     alert = await db.get(Alert, alert_id)

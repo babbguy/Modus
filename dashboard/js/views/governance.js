@@ -7,7 +7,7 @@
 
 import { initGrid, addTiles, loadLayout } from '../grid.js';
 import { createTile, setTileLoading, setTileEmpty, setTileError, setTileMeta } from '../tile.js';
-import { rawFetch, esc } from '../api.js';
+import { rawFetch, esc, loadAppNames, appName } from '../api.js';
 import { fmtCost, fmtNum, fmtDate } from '../format.js';
 import { get } from '../state.js';
 import { openModal, closeModal } from '../modal.js';
@@ -186,19 +186,21 @@ async function loadData() {
   setTileLoading('gov-evolution', 'text');
 
   try {
-    const [stats, proposals, rewinds, evolution, ledgerEntries, ledgerStats] = await Promise.all([
+    await loadAppNames();
+    const [stats, proposals, rewinds, evolution, ledgerEntries, ledgerStats, ledgerVerify] = await Promise.all([
       rawFetch('/api/v1/governance/stats').then(r => r.ok ? r.json() : null).catch(() => null),
       rawFetch('/api/v1/governance/proposals?limit=50').then(r => r.ok ? r.json() : null).catch(() => null),
       rawFetch('/api/v1/governance/rewind-events?limit=20').then(r => r.ok ? r.json() : null).catch(() => null),
       rawFetch('/api/v1/governance/evolution/status').then(r => r.ok ? r.json() : null).catch(() => null),
       rawFetch('/api/v1/governance/cot-ledger/entries?limit=50').then(r => r.ok ? r.json() : null).catch(() => null),
       rawFetch('/api/v1/governance/cot-ledger/stats').then(r => r.ok ? r.json() : null).catch(() => null),
+      rawFetch('/api/v1/governance/cot-ledger/verify').then(r => r.ok ? r.json() : null).catch(() => null),
     ]);
 
     if (_destroyed) return;
 
     _renderStatus(stats);
-    _renderCotLedger(Array.isArray(ledgerEntries) ? ledgerEntries : [], ledgerStats);
+    _renderCotLedger(Array.isArray(ledgerEntries) ? ledgerEntries : [], ledgerStats, ledgerVerify);
     _renderProposals(Array.isArray(proposals) ? proposals : []);
     _renderRewinds(Array.isArray(rewinds) ? rewinds : []);
     _renderEvolution(evolution);
@@ -249,7 +251,7 @@ function _renderStatus(stats) {
 
 // ── CoT Ledger ───────────────────────────────────────────────────────────────
 
-function _renderCotLedger(entries, stats) {
+function _renderCotLedger(entries, stats, verify) {
   const body = document.getElementById('gov-cot-ledger-body');
   if (!body) return;
 
@@ -266,7 +268,7 @@ function _renderCotLedger(entries, stats) {
 
   if (stats) {
     const total = stats.total_entries || entries.length;
-    const verified = stats.chain_valid !== undefined ? (stats.chain_valid ? 'Verified' : 'Broken') : null;
+    const verified = verify && typeof verify.valid === 'boolean' ? (verify.valid ? 'Verified' : 'Broken') : null;
     let metaText = `${fmtNum(total)} entries`;
     if (verified) metaText += ` \u00b7 Chain: ${verified}`;
     setTileMeta('gov-cot-ledger', metaText);
@@ -338,7 +340,7 @@ function _renderLedgerEntry(entry, idx) {
   const trig = TRIGGER_COLORS[entry.trigger] || { bg: 'rgba(255,255,255,0.06)', color: 'var(--muted)' };
   const trigLabel = (entry.trigger || 'unknown').replace(/_/g, ' ');
 
-  const ts = entry.timestamp ? new Date(entry.timestamp) : null;
+  const ts = entry.created_at ? new Date(entry.created_at) : null;
   const timeStr = ts ? ts.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '\u2014';
 
   const hash = entry.entry_hash ? entry.entry_hash.substring(0, 16) + '\u2026' : '';
@@ -348,7 +350,7 @@ function _renderLedgerEntry(entry, idx) {
     : '';
 
   return `
-    <div class="cot-entry" data-entry-idx="${idx}" data-type="${esc(entry.decision_type || '')}" data-trigger="${esc(entry.trigger || '')}" data-ts="${entry.timestamp || ''}"
+    <div class="cot-entry" data-entry-idx="${idx}" data-type="${esc(entry.decision_type || '')}" data-trigger="${esc(entry.trigger || '')}" data-ts="${entry.created_at || ''}"
          style="display:flex;gap:12px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;cursor:pointer;transition:background 0.15s,border-color 0.15s">
       <div class="cot-entry-time" style="flex-shrink:0;width:100px;font-family:var(--mono);font-size:10px;color:var(--muted);padding-top:2px;line-height:1.5">
         ${timeStr}
@@ -359,7 +361,7 @@ function _renderLedgerEntry(entry, idx) {
           <span style="display:inline-block;padding:2px 7px;border-radius:4px;font-size:10px;background:${trig.bg};color:${trig.color}">${esc(trigLabel)}</span>
           ${regTags ? `<span style="display:inline-flex;gap:3px">${regTags}</span>` : ''}
         </div>
-        <div style="font-size:13px;font-weight:500;color:var(--text);margin-bottom:3px">${esc(entry.summary || entry.title || 'Untitled Decision')}</div>
+        <div style="font-size:13px;font-weight:500;color:var(--text);margin-bottom:3px">${esc(entry.decision_summary || 'Untitled Decision')}</div>
         ${hash ? `<div style="font-family:var(--mono);font-size:9px;color:var(--muted);opacity:0.6">${esc(hash)}</div>` : ''}
       </div>
     </div>
@@ -395,7 +397,7 @@ function _applyLedgerFilters(body, entries) {
 
 function _showLedgerEntryModal(entry) {
   const dt = DECISION_COLORS[entry.decision_type] || { bg: 'rgba(255,255,255,0.06)', color: 'var(--muted)', label: entry.decision_type || 'Unknown' };
-  const ts = entry.timestamp ? new Date(entry.timestamp).toLocaleString() : '\u2014';
+  const ts = entry.created_at ? new Date(entry.created_at).toLocaleString() : '\u2014';
 
   openModal({
     title: 'CoT Ledger Entry',
@@ -456,14 +458,9 @@ function _showLedgerEntryModal(entry) {
 
       // Linked Entities
       const links = [];
-      if (entry.proposal_id) links.push({ label: 'Proposal ID', value: entry.proposal_id });
-      if (entry.policy_id) links.push({ label: 'Policy ID', value: entry.policy_id });
-      if (entry.evolution_generation_id) links.push({ label: 'Evolution Gen ID', value: entry.evolution_generation_id });
-      if (entry.linked_entities) {
-        Object.entries(entry.linked_entities).forEach(([k, v]) => {
-          links.push({ label: k.replace(/_/g, ' '), value: v });
-        });
-      }
+      if (entry.linked_proposal_id) links.push({ label: 'Proposal ID', value: entry.linked_proposal_id });
+      if (entry.linked_policy_id) links.push({ label: 'Policy ID', value: entry.linked_policy_id });
+      if (entry.linked_evolution_gen_id) links.push({ label: 'Evolution Gen ID', value: entry.linked_evolution_gen_id });
 
       const linkedHtml = links.length > 0
         ? `<div style="display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:11px">
@@ -479,7 +476,7 @@ function _showLedgerEntryModal(entry) {
           <!-- Header -->
           <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
             <div>
-              <div style="font-weight:600;font-size:14px;color:var(--text);margin-bottom:6px">${esc(entry.summary || entry.title || 'Untitled Decision')}</div>
+              <div style="font-weight:600;font-size:14px;color:var(--text);margin-bottom:6px">${esc(entry.decision_summary || 'Untitled Decision')}</div>
               <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
                 <span style="display:inline-block;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600;background:${dt.bg};color:${dt.color}">${esc(dt.label)}</span>
                 <span style="font-size:11px;color:var(--muted)">${ts}</span>
@@ -551,20 +548,20 @@ async function _verifyChain() {
           return;
         }
 
-        const valid = result.valid || result.chain_valid;
+        const valid = result.valid === true;
         const icon = valid ? 'fa-solid fa-circle-check' : 'fa-solid fa-circle-xmark';
         const color = valid ? 'var(--accent)' : 'var(--danger)';
         const status = valid ? 'Chain Integrity Verified' : 'Chain Integrity Broken';
-        const totalEntries = result.total_entries || result.entries_checked || '\u2014';
-        const brokenAt = result.broken_at_index != null ? result.broken_at_index : null;
+        const totalEntries = result.entries_checked ?? '\u2014';
+        const brokenAt = result.first_invalid_seq != null ? result.first_invalid_seq : null;
 
         modalBody.innerHTML = `
           <div style="display:flex;flex-direction:column;align-items:center;gap:12px;padding:16px 0">
             <i class="${icon}" style="font-size:48px;color:${color}"></i>
             <div style="font-size:16px;font-weight:600;color:${color}">${status}</div>
             <div style="font-size:12px;color:var(--muted)">${totalEntries} entries checked</div>
-            ${brokenAt != null ? `<div style="font-size:12px;color:var(--danger)">Break detected at entry index ${brokenAt}</div>` : ''}
-            ${result.message ? `<div style="font-size:12px;color:var(--muted);text-align:center">${esc(result.message)}</div>` : ''}
+            ${brokenAt != null ? `<div style="font-size:12px;color:var(--danger)">Break detected at sequence ${brokenAt}</div>` : ''}
+            ${result.error ? `<div style="font-size:12px;color:var(--muted);text-align:center">${esc(result.error)}</div>` : ''}
           </div>
         `;
       },
@@ -670,7 +667,7 @@ function _renderRewinds(rewinds) {
             const created = r.created_at ? new Date(r.created_at).toLocaleDateString() : '\u2014';
             return `<tr>
               <td style="font-family:var(--mono);font-size:11px">${esc(r.session_id || '\u2014')}</td>
-              <td>${esc(r.app_id || '')}</td>
+              <td>${esc(appName(r.app_id))}</td>
               <td><span class="ds-badge-warning">${esc(r.trigger_reason || '')}</span></td>
               <td style="text-align:center;font-family:var(--mono)">${rolledBack}</td>
               <td style="font-family:var(--mono);font-size:11px">${created}</td>
@@ -695,11 +692,12 @@ function _renderEvolution(evo) {
     return;
   }
 
-  const gen = evo.generation || 0;
-  const fitness = evo.fitness_score ? evo.fitness_score.toFixed(3) : '\u2014';
-  const mutations = evo.total_mutations || evo.mutations || 0;
-  const population = evo.population_size || evo.population || 0;
-  const fitnessColor = evo.fitness_score >= 0.8 ? 'var(--accent)' : evo.fitness_score >= 0.5 ? 'var(--warn)' : 'var(--danger)';
+  const gen = evo.latest_generation ?? 0;
+  const best = evo.latest_best_fitness;
+  const fitness = typeof best === 'number' ? best.toFixed(3) : '\u2014';
+  const mutations = evo.total_mutations || 0;
+  const population = evo.latest_population_size || 0;
+  const fitnessColor = best >= 0.8 ? 'var(--accent)' : best >= 0.5 ? 'var(--warn)' : 'var(--danger)';
 
   body.innerHTML = `
     <div style="display:flex;flex-wrap:wrap;gap:20px;padding:16px">

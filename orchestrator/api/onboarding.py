@@ -38,7 +38,7 @@ router = APIRouter()
 async def _onboarding_auth(
     request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> Optional[Identity]:
     """
     Conditional auth gate for onboarding endpoints.
@@ -223,7 +223,7 @@ def _yaml_scalar(v: str):
 @router.get("/onboarding/status", response_model=OnboardingStatus, tags=["onboarding"])
 async def onboarding_status(
     _auth: Optional[Identity] = Depends(_onboarding_auth),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> OnboardingStatus:
     """Check whether the first-start onboarding wizard should be shown."""
 
@@ -281,7 +281,7 @@ async def onboarding_status(
 async def onboarding_apply(
     body: ApplyRequest,
     _auth: Optional[Identity] = Depends(_onboarding_auth),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> ApplyResponse:
     """
     Apply the wizard's output: create team, default policies, and thresholds.
@@ -459,7 +459,7 @@ async def onboarding_upload(
 @router.post("/onboarding/complete", tags=["onboarding"])
 async def onboarding_complete(
     _auth: Optional[Identity] = Depends(_onboarding_auth),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> dict:
     """Mark onboarding as complete so the wizard does not show again."""
     now = datetime.now(timezone.utc).isoformat()
