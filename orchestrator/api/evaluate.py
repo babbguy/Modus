@@ -67,6 +67,19 @@ class EvaluateResponse(BaseModel):
     hierarchy: Optional[dict] = None       # {team_spend, app_spend, session_spend}
 
 
+async def _discard_session(db: AsyncSession) -> None:
+    """Roll back whatever the abandoned evaluation left in the session.
+
+    A timed-out (cancelled) or failed evaluation can leave the session in an
+    invalid transaction. get_session commits when the request finishes, so the
+    fallback decision would otherwise turn into a 500 (PendingRollbackError).
+    """
+    try:
+        await db.rollback()
+    except Exception as exc:  # the fallback decision must still be returned
+        logger.error("Evaluate: rollback after an abandoned evaluation failed: %s", exc)
+
+
 # ── Endpoint ──────────────────────────────────────────────────────────────────
 
 @evaluate_router.post("/", response_model=EvaluateResponse)
@@ -96,6 +109,7 @@ async def evaluate_request(
         )
         return result
     except asyncio.TimeoutError:
+        await _discard_session(db)
         logger.warning(
             "Evaluate timeout (%dms) for app=%s provider=%s model=%s — %s",
             settings.enforcement_timeout_ms, req.app_id, req.provider, req.model,
@@ -123,6 +137,7 @@ async def evaluate_request(
         # fail-open allow by the blanket error handler below.
         raise
     except Exception as exc:
+        await _discard_session(db)
         logger.error("Evaluate error for app=%s: %s", req.app_id, exc, exc_info=True)
         from orchestrator.core.pricing import estimate_cost
         _, _, est_cost = estimate_cost(

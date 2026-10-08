@@ -72,3 +72,51 @@ def test_function_scope_finishes_teardown_before_the_response():
     finally:
         server.should_exit = True
         thread.join(timeout=5)
+
+
+# ── Evaluate fallbacks after an abandoned evaluation ─────────────────────────
+
+_EVAL_BODY = {
+    "provider": "openai", "model": "gpt-4o", "input_tokens": 100,
+    "output_tokens": 50, "app_id": "bench-app", "environment": "production",
+}
+
+
+async def _break_session(db):
+    """Leave the session in the invalid-transaction state a cancelled or failed
+    evaluation can leave behind (a flush that failed and was not rolled back)."""
+    from sqlalchemy.exc import IntegrityError
+
+    from orchestrator.db.models import Team
+
+    db.add_all([Team(slug="dup-slug", name="a"), Team(slug="dup-slug", name="b")])
+    try:
+        await db.flush()
+    except IntegrityError:
+        pass
+    else:  # pragma: no cover - the duplicate slug must violate the constraint
+        raise AssertionError("expected a failed flush")
+
+
+@pytest.mark.parametrize("failure", ["timeout", "error"])
+async def test_evaluate_fallback_survives_a_broken_session(client, monkeypatch, failure):
+    """A timed-out or failed evaluation returns its fail-closed decision -- the
+    commit at the end of the request must not turn it into a 500."""
+    from orchestrator.api import evaluate as evaluate_mod
+    from orchestrator.core.config import settings
+
+    async def abandoned(req, identity, db):
+        await _break_session(db)
+        if failure == "timeout":
+            await asyncio.sleep(5)
+        raise RuntimeError("evaluation failed")
+
+    monkeypatch.setattr(evaluate_mod, "_evaluate_inner", abandoned)
+    monkeypatch.setattr(settings, "enforcement_timeout_ms", 50)
+    monkeypatch.setattr(settings, "enforcement_fail_open", False)
+
+    resp = await client.post("/api/v1/evaluate/", json=_EVAL_BODY)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["decision"] == "deny"
+    assert ("timed out" if failure == "timeout" else "Evaluation error") in body["reason"]
