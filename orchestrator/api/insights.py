@@ -373,7 +373,7 @@ async def _metered_calls_since(db, since, team_sql, team_params, hours) -> int:
 async def get_ops_kpis(
     team_id: Optional[str] = Query(None, description="Restrict to one team"),
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Operational KPIs for the DevOps view, computed from stored data only."""
     now = datetime.now(timezone.utc)
