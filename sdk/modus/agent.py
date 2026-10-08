@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import atexit
 import collections
+import fnmatch
 import hashlib
 import json
 import logging
@@ -820,7 +821,8 @@ class ModusAgent:
             return
         try:
             req = urllib_request.Request(
-                f"{self.orchestrator_url}/api/v1/policies",
+                f"{self.orchestrator_url}/api/v1/policies/sync",
+                data=b"{}",
                 headers={
                     "Content-Type": "application/json",
                     "X-Modus-APIKey": self._api_key,
@@ -830,11 +832,16 @@ class ModusAgent:
             )
             with _urlopen_tls(req, timeout=self.timeout) as resp:
                 data = json.loads(resp.read().decode())
-            self._local_policies = data.get("policies", [])
+            policies = data.get("policies", [])
+            if not isinstance(policies, list):
+                raise ValueError("policy sync response has no 'policies' list")
+            self._local_policies = policies
             self._last_policy_sync = time.monotonic()
             logger.debug("Modus: synced %d local policies", len(self._local_policies))
         except Exception as exc:
-            logger.debug("Modus: policy sync failed: %s", exc)
+            # Keep the last good policy set; the gateway remains the source of truth.
+            logger.warning("Modus: policy sync failed (keeping %d cached policies): %s",
+                           len(self._local_policies), exc)
 
     def _policy_sync_loop(self) -> None:
         """Background thread to keep local policies fresh (every 5 mins)."""
@@ -1215,14 +1222,24 @@ class ModusAgent:
         if not self._local_policies:
             return None
 
-        for p in self._local_policies:
+        # Same ordering the gateway uses: app > team > platform, then priority.
+        scope_rank = {"app": 0, "team": 1, "platform": 2}
+        ordered = sorted(
+            self._local_policies,
+            key=lambda p: (scope_rank.get(p.get("scope"), 99), p.get("priority", 100)),
+        )
+        for p in ordered:
             ptype = p.get("policy_type")
-            cfg = p.get("config", {})
+            cfg = p.get("config") or {}
+            effect = p.get("effect", "deny")
             match = False
+
+            if not self._local_conditions_match(p.get("conditions"), provider, model):
+                continue
 
             if ptype == "model_allowlist":
                 models = cfg.get("models", [])
-                if model and model not in models:
+                if not model or model not in models:
                     match = True
             elif ptype == "model_denylist":
                 models = cfg.get("models", [])
@@ -1237,16 +1254,42 @@ class ModusAgent:
                 if self.environment in envs:
                     match = True
 
-            if match:
-                return {
-                    "decision": p.get("effect", "deny"),
-                    "reason": f"Blocked by local policy: {p.get('name')}",
-                    "policy_id": p.get("id"),
-                    "policy_name": p.get("name"),
-                    "suggested_model": p.get("suggested_model"),
-                    "message": p.get("action", {}).get("message"),
-                }
+            if not match:
+                continue
+            if effect == "warn":
+                # warn never blocks; the gateway records it.
+                logger.warning("Modus: local policy '%s' warns for %s/%s",
+                               p.get("name"), provider, model)
+                continue
+            action = p.get("action") or {}
+            return {
+                "decision": effect,
+                "reason": f"Blocked by local policy: {p.get('name')}",
+                "policy_id": p.get("id"),
+                "policy_name": p.get("name"),
+                "suggested_model": action.get("suggested_model") or p.get("suggested_model"),
+                "message": action.get("message"),
+                "retry_after_seconds": action.get("retry_after_seconds", 60)
+                if effect == "throttle" else None,
+            }
         return None
+
+    def _local_conditions_match(self, conditions: Optional[dict], provider: str,
+                                model: Optional[str]) -> bool:
+        """Mirror of the gateway's condition matching (AND of all conditions)."""
+        if not conditions:
+            return True
+        if "providers" in conditions and provider not in conditions["providers"]:
+            return False
+        if "model_pattern" in conditions:
+            if not model or not fnmatch.fnmatch(model.lower(),
+                                                str(conditions["model_pattern"]).lower()):
+                return False
+        if "environments" in conditions and self.environment not in conditions["environments"]:
+            return False
+        if "resource_types" in conditions and "llm_call" not in conditions["resource_types"]:
+            return False
+        return True
 
     def _call_evaluate(self, provider, model, estimated_tokens,
                        estimated_cost, resource_type) -> dict:

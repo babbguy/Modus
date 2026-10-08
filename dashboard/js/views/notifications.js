@@ -411,27 +411,27 @@ function _renderDelivery(alerts) {
     return;
   }
 
-  // Calculate delivery stats
-  const withNotif = alerts.filter(a => a.notification_sent != null);
-  const sent = withNotif.filter(a => a.notification_sent === true);
-  const failed = withNotif.filter(a => a.notification_sent === false);
-  const total = withNotif.length;
-  const successRate = total > 0 ? ((sent.length / total) * 100).toFixed(1) : '—';
+  // Delivery result shape (written by orchestrator/core/threshold_evaluator.py,
+  // channel_result()): notification_result = { <channel>: {status, success, error} }
+  // where success === true iff status === 'delivered'. Alerts that were never
+  // dispatched (no channel configured) have an empty/null result and are not
+  // counted as failures.
+  const channelOk = (r) => r === true || !!(r && (r.success === true || r.status === 'delivered'));
+  const attempted = alerts.filter(a => a.notification_result && typeof a.notification_result === 'object'
+    && Object.keys(a.notification_result).length > 0);
+  const failed = attempted.filter(a => Object.values(a.notification_result).some(r => !channelOk(r)));
+  const sent = attempted.filter(a => !failed.includes(a));
+  const total = attempted.length;
+  const successRate = total > 0 ? ((sent.length / total) * 100).toFixed(1) : '\u2014';
 
   // Per-channel health from notification_result
   const channelStats = {};
-  withNotif.forEach(a => {
-    const result = a.notification_result;
-    if (result && typeof result === 'object') {
-      Object.keys(result).forEach(ch => {
-        if (!channelStats[ch]) channelStats[ch] = { success: 0, fail: 0 };
-        if (result[ch] === true || (result[ch] && result[ch].success)) {
-          channelStats[ch].success++;
-        } else {
-          channelStats[ch].fail++;
-        }
-      });
-    }
+  attempted.forEach(a => {
+    Object.entries(a.notification_result).forEach(([ch, r]) => {
+      if (!channelStats[ch]) channelStats[ch] = { success: 0, fail: 0 };
+      if (channelOk(r)) channelStats[ch].success++;
+      else channelStats[ch].fail++;
+    });
   });
 
   // Recent failures

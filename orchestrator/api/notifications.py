@@ -244,13 +244,16 @@ async def save_config(
 async def test_all_channels(
     request: Request,
     identity: Identity = Depends(get_identity),
+    db: AsyncSession = Depends(get_session),
 ) -> TestResponse:
     """
     Fire a test alert payload to every enabled channel.
     Returns per-channel results so the user can see exactly what succeeded or failed.
     """
-    # Re-load config from cache (already loaded by prior GET/PUT call or startup)
-    config = NotificationConfig(**_config_cache) if _config_cache else NotificationConfig()
+    # Load from the DB if this process has not cached it yet (e.g. right after a
+    # restart) -- otherwise a configured channel would report "none configured".
+    stored = await _load_config(db)
+    config = NotificationConfig(**stored) if stored else NotificationConfig()
 
     test_payload = _build_test_payload()
     tasks = []
@@ -296,6 +299,7 @@ async def test_all_channels(
 async def test_one_channel(
     channel_name: str,
     identity: Identity = Depends(get_identity),
+    db: AsyncSession = Depends(get_session),
 ) -> TestResponse:
     """Fire a test alert to one specific channel by name."""
     valid_channels = {"slack", "teams", "email", "pagerduty", "webhook"}
@@ -305,7 +309,8 @@ async def test_one_channel(
             detail=f"Unknown channel '{channel_name}'. Valid: {sorted(valid_channels)}",
         )
 
-    config = NotificationConfig(**_config_cache) if _config_cache else NotificationConfig()
+    stored = await _load_config(db)
+    config = NotificationConfig(**stored) if stored else NotificationConfig()
     test_payload = _build_test_payload()
     result: Optional[TestResult] = None
 
