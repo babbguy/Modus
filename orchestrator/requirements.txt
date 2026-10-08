@@ -5,7 +5,7 @@
 # Dev: pip install -r requirements.txt -r requirements-dev.txt
 
 # ── Web framework ──────────────────────────────────────────────────────────────
-fastapi==0.135.3
+fastapi==0.142.2
 uvicorn[standard]==0.44.0          # includes uvloop, httptools
 uvloop==0.21.0; sys_platform != "win32"  # fast event loop (Linux/macOS only)
 
