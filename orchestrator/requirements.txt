@@ -41,7 +41,7 @@ httpx==0.28.0
 aiosmtplib==3.0.2                   # async SMTP for email invitations
 
 # ── Utilities ─────────────────────────────────────────────────────────────────
-python-multipart==0.0.24            # FastAPI form parsing
+python-multipart==0.0.32            # FastAPI form parsing
 
 # ── Routing engine (optional) ─────────────────────────────────────────────
 # numpy>=1.26.0                     # OPTIONAL: calibration statistics, drift detection
