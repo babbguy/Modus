@@ -120,9 +120,47 @@
 
   /* ─── Global Defaults ──────────────────────────────────────────── */
 
+  /* ─── Sparse line series ───────────────────────────────────────── */
+
+  // Line series hide their points (radius 0) and draw only the line. A series
+  // with a single value has no line, so it rendered as an empty chart: on the
+  // first day of data the Overview "Cost Over Time" chart showed nothing.
+  // Draw the points of any line series with fewer than two values.
+  const SPARSE_POINT_RADIUS = 4;
+
+  function numericCount(data) {
+    let n = 0;
+    for (const v of data || []) {
+      const y = v !== null && typeof v === 'object' ? v.y : v;
+      if (y !== null && y !== undefined && y !== '' && !Number.isNaN(Number(y))) n += 1;
+    }
+    return n;
+  }
+
+  const sparsePointsPlugin = {
+    id: 'modusSparsePoints',
+    beforeUpdate(chart) {
+      const chartType = chart.config.type;
+      (chart.data.datasets || []).forEach((ds) => {
+        if ((ds.type || chartType) !== 'line') return;
+        const sparse = numericCount(ds.data) < 2;
+        if (sparse && !ds._modusSparse) {
+          ds._modusSparse = { pointRadius: ds.pointRadius, pointBackgroundColor: ds.pointBackgroundColor };
+          ds.pointRadius = SPARSE_POINT_RADIUS;
+          if (ds.pointBackgroundColor === undefined) ds.pointBackgroundColor = ds.borderColor;
+        } else if (!sparse && ds._modusSparse) {
+          ds.pointRadius = ds._modusSparse.pointRadius;
+          ds.pointBackgroundColor = ds._modusSparse.pointBackgroundColor;
+          delete ds._modusSparse;
+        }
+      });
+    },
+  };
+
   function applyDefaults() {
     if (!window.Chart) return;
     const defaults = Chart.defaults;
+    if (typeof Chart.register === 'function') Chart.register(sparsePointsPlugin);
 
     defaults.font.family = "'Inter', -apple-system, BlinkMacSystemFont, sans-serif";
     defaults.font.size = 11;
@@ -698,6 +736,7 @@
     toast: toast,
     countUp: countUp,
     destroy: destroy,
+    sparsePointsPlugin: sparsePointsPlugin,
     PALETTE: PALETTE,
     getColor: getColor,
   };
