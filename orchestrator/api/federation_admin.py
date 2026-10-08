@@ -57,6 +57,7 @@ class PeerUpdateRequest(BaseModel):
 class PeerResponse(BaseModel):
     id: str
     team_id: Optional[str] = None
+    team_slug: Optional[str] = None  # populated by the list endpoint
     name: str
     peer_url_masked: str
     api_key_prefix: str
@@ -109,10 +110,11 @@ def _dt_iso(dt: Optional[datetime]) -> Optional[str]:
     return dt.isoformat() if dt else None
 
 
-def _peer_to_response(peer: Any) -> PeerResponse:
+def _peer_to_response(peer: Any, team_slug: Optional[str] = None) -> PeerResponse:
     return PeerResponse(
         id=peer.id,
         team_id=peer.team_id,
+        team_slug=team_slug,
         name=peer.name,
         peer_url_masked=_mask_url(peer.peer_url),
         api_key_prefix=peer.api_key_prefix,
@@ -176,7 +178,15 @@ async def list_peers(
         stmt = stmt.where(FederationPeer.status == status)
     result = await session.execute(stmt)
     peers = result.scalars().all()
-    return [_peer_to_response(p) for p in peers]
+
+    from orchestrator.db.models import Team
+
+    team_ids = {p.team_id for p in peers if p.team_id}
+    slugs: dict[str, str] = {}
+    if team_ids:
+        rows = await session.execute(select(Team.id, Team.slug).where(Team.id.in_(team_ids)))
+        slugs = {str(r[0]): r[1] for r in rows.all()}
+    return [_peer_to_response(p, slugs.get(str(p.team_id))) for p in peers]
 
 
 @federation_admin_router.patch("/peers/{peer_id}", response_model=PeerResponse)

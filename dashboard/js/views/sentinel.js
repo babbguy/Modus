@@ -149,11 +149,11 @@ function _renderKpis(stats) {
   }
 
   const total = stats.total_threats || 0;
-  const critical = stats.critical_threats || 0;
+  const critical = (stats.by_severity || {}).critical || 0;
   const blocked = stats.blocked_threats || 0;
   const avgConf = stats.avg_confidence ? (stats.avg_confidence * 100).toFixed(1) + '%' : '\u2014';
 
-  const sev = stats.severity_distribution || {};
+  const sev = stats.by_severity || {};
   const riskScore = critical > 5 ? 'High' : critical > 0 ? 'Medium' : 'Low';
   const riskColor = critical > 5 ? 'var(--danger)' : critical > 0 ? 'var(--warn)' : 'var(--accent)';
 
@@ -190,6 +190,11 @@ function _renderKpis(stats) {
   `;
 }
 
+/** Threat actions that stopped or rolled back the call (matches the API's blocked_threats). */
+function _isBlocking(action) {
+  return action === 'block' || action === 'terminate' || action === 'rewind';
+}
+
 function _renderThreats(threats) {
   const body = document.getElementById('sentinel-threats-body');
   if (!body) return;
@@ -223,15 +228,15 @@ function _renderThreats(threats) {
         <tbody>
           ${items.map((t, idx) => {
             const sevClass = t.severity === 'critical' ? 'danger' : t.severity === 'high' ? 'warning' : t.severity === 'medium' ? 'info' : 'success';
-            const actionClass = t.action === 'blocked' ? 'danger' : t.action === 'flagged' ? 'warning' : 'neutral';
-            const conf = t.confidence ? (t.confidence * 100).toFixed(1) + '%' : '\u2014';
-            const ts = t.timestamp ? new Date(t.timestamp).toLocaleString() : '\u2014';
+            const actionClass = _isBlocking(t.action_taken) ? 'danger' : t.action_taken === 'allow' ? 'neutral' : 'warning';
+            const conf = t.confidence_score != null ? (t.confidence_score * 100).toFixed(1) + '%' : '\u2014';
+            const ts = t.created_at ? new Date(t.created_at).toLocaleString() : '\u2014';
             return `<tr class="threat-row" data-threat-idx="${idx}" style="cursor:pointer">
               <td style="font-family:var(--mono);font-size:11px">${esc(t.session_id || '\u2014')}</td>
               <td><span class="ds-badge-neutral">${esc(t.threat_type || '\u2014')}</span></td>
               <td><span class="ds-badge-${sevClass}">${esc(t.severity || '\u2014')}</span></td>
               <td style="font-family:var(--mono);font-size:11px">${conf}</td>
-              <td><span class="ds-badge-${actionClass}">${esc(t.action || '\u2014')}</span></td>
+              <td><span class="ds-badge-${actionClass}">${esc(t.action_taken || '\u2014')}</span></td>
               <td style="font-family:var(--mono);font-size:11px;white-space:nowrap">${ts}</td>
             </tr>`;
           }).join('')}
@@ -265,7 +270,7 @@ function _renderZk(zk) {
   }
 
   const total = zk.total_proofs || 0;
-  const verified = zk.verified || 0;
+  const verified = zk.valid_proofs || 0;
   const coverage = zk.coverage ? (zk.coverage * 100).toFixed(1) : '0.0';
   const coverageColor = parseFloat(coverage) >= 80 ? 'var(--accent)' : parseFloat(coverage) >= 50 ? 'var(--warn)' : 'var(--danger)';
 
@@ -307,11 +312,11 @@ function _renderPqc(pqc) {
     return;
   }
 
-  const rawScore = pqc.compliance_score ?? pqc.score ?? 0;
+  const rawScore = pqc.compliance_score ?? 0;
   const scoreNorm = rawScore > 1 ? rawScore / 100 : rawScore;
   const scorePct = Math.min(Math.round(scoreNorm * 100), 100);
-  const algorithms = pqc.algorithms_count || pqc.pqc_algorithms || 0;
-  const endpoints = pqc.protected_endpoints || 0;
+  const algorithms = (pqc.pqc_algorithms || []).length;
+  const endpoints = pqc.pqc_signed || 0;
   const scoreColor = scoreNorm >= 0.8 ? 'var(--accent)' : scoreNorm >= 0.5 ? 'var(--warn)' : 'var(--danger)';
 
   let statusText, statusColor;
@@ -335,7 +340,7 @@ function _renderPqc(pqc) {
           <div class="kpi-value">${algorithms}</div>
         </div>
         <div class="kpi-card" style="flex:1;min-width:80px">
-          <div class="kpi-label">Endpoints</div>
+          <div class="kpi-label">PQC-signed</div>
           <div class="kpi-value">${endpoints}</div>
         </div>
       </div>
@@ -358,8 +363,8 @@ function _showThreatModal(threat) {
     title: 'Threat Details',
     maxWidth: '480px',
     renderBody: (body) => {
-      const conf = threat.confidence ? (threat.confidence * 100).toFixed(1) + '%' : '\u2014';
-      const ts = threat.timestamp ? new Date(threat.timestamp).toLocaleString() : '\u2014';
+      const conf = threat.confidence_score != null ? (threat.confidence_score * 100).toFixed(1) + '%' : '\u2014';
+      const ts = threat.created_at ? new Date(threat.created_at).toLocaleString() : '\u2014';
 
       body.innerHTML = `
         <div style="display:flex;flex-direction:column;gap:12px;padding:4px 0">
@@ -376,11 +381,12 @@ function _showThreatModal(threat) {
             <span style="color:var(--muted)">Confidence</span>
             <span style="font-family:var(--mono);color:var(--text)">${conf}</span>
             <span style="color:var(--muted)">Action Taken</span>
-            <span style="color:var(--text)">${esc(threat.action || '\u2014')}</span>
+            <span style="color:var(--text)">${esc(threat.action_taken || '\u2014')}</span>
+            <span style="color:var(--muted)">Detection</span>
+            <span style="color:var(--text)">${esc(threat.detection_method || '\u2014')}</span>
             <span style="color:var(--muted)">Timestamp</span>
             <span style="font-family:var(--mono);font-size:11px;color:var(--text)">${ts}</span>
             ${threat.app_id ? `<span style="color:var(--muted)">App</span><span style="color:var(--text)">${esc(threat.app_id)}</span>` : ''}
-            ${threat.description ? `<span style="color:var(--muted)">Details</span><span style="color:var(--text)">${esc(threat.description)}</span>` : ''}
           </div>
         </div>
       `;

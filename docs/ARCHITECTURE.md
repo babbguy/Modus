@@ -176,6 +176,45 @@ none of them is required for the core cost-governance features.
 | TRiSM sentinel | `trism_sentinel`, `trism_patterns` | Heuristic detectors for agentic-session threat patterns. |
 | Federation | `federation_engine`, `federator/` | Opt-in sharing of numeric deltas with a k-anonymity threshold; not zero-knowledge or differentially private. |
 
+## API conventions
+
+The dashboard is a plain client of the public API; it reads the documented field
+names and nothing else, so these conventions apply to every consumer.
+
+* **Timestamps are timezone-aware UTC.** Every instant is ISO-8601 with an
+  offset (`2026-10-08T14:10:54Z` or `+00:00`), on SQLite and PostgreSQL alike
+  (the `UTCDateTime` column type normalises both). The only values without an
+  offset are calendar *bucket labels* (`period` on cost-over-time series and the
+  executive savings series), which name a day, not an instant.
+* **Team scope.** Platform-admin identities (stub auth, the master key, platform
+  admins) have no team of their own and see every team; most list endpoints take
+  an optional `team_id` to narrow that. Any other identity sees only the teams in
+  its `team_ids` (none means nothing), and naming a team outside that set is a 403.
+* **Money** is a decimal string or a float rounded for display, never inferred
+  from a float computation.
+
+Response fields added or renamed for the dashboard:
+
+| Endpoint | Fields |
+|---|---|
+| `GET /insights/anomalies`, `/insights/recommendations`, `/insights/enforcement-summary`, `/reports/roi` | `?team_id=` filter; admins no longer get empty results |
+| `GET /insights/enforcement-summary` | `allowed` is derived from metered calls minus blocked and throttled (plain allow decisions are not stored) |
+| `GET /insights/ops-kpis` (new) | `cost_this_hour`, `blocked_today`, `throttled_today`, `calls_today`, `tokens_per_call`, `avg_latency_ms`, `latency_samples`, `window_start` |
+| `GET /reports/roi` | `net_savings`, `cost_per_blocked`, `roi_multiple` (null while `platform_cost_usd` is 0) |
+| `GET /dashboard/top-models` | `pct`: share of all spend in the window and scope, not of the rows returned |
+| `GET /governance/cot-ledger/verify` | without `team_id`, verifies every visible team's chain; adds `teams_checked` |
+| `GET /governance/evolution/status` | `latest_population_size`, `total_mutations` (team-scoped) |
+| `GET /sentinel/stats`, `/sentinel/threats` | stats add `by_action` and `blocked_threats`; threats add `app_id` |
+| `GET /compliance/attestation-stats` | `merkle_roots` |
+| `GET /compliance/pqc/score` | `pqc_algorithms` |
+| `GET /compliance/zk-proofs/stats` | `coverage` (valid / total, 0-1) |
+| `GET /apps`, `/apps/{id}` | `enforcement_state`, `enforcement_suspended_at`, `enforcement_suspended_reason` |
+| `GET /finance/chargeback` | each row carries `period` (`YYYY-MM`) |
+| `GET /finance/summary` | `cost_trend_pct` (month to date vs the same span of the prior month) |
+| `GET /admin/nomus/status`, `POST /admin/nomus/sync` | `regulation_count` (distinct jurisdictions; `policy_count` is the rule count) |
+| `GET /admin/federation/peers` | `team_slug` |
+| `/audit-log` for `pricing_override` | `before` / `after` carry provider, model and both costs |
+
 ## Design constraints
 
 * **Local by default.** Policy evaluation uses locally cached rules and the

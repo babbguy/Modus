@@ -10,7 +10,7 @@
 
 import { initGrid, addTiles, loadLayout } from '../grid.js';
 import { createTile, setTileLoading, setTileEmpty, setTileError } from '../tile.js';
-import { rawFetch, esc } from '../api.js';
+import { rawFetch, esc, loadAppNames, appName } from '../api.js';
 import { fmtCost, fmtNum } from '../format.js';
 import { LAYOUTS } from '../layouts/defaults.js';
 
@@ -129,6 +129,7 @@ function _createDefensiveSpendTile() {
 // ── Data fetching ────────────────────────────────────────────────────────────
 
 async function _loadData() {
+  await loadAppNames();
   if (_destroyed) return;
 
   // Set loading states on all tiles
@@ -221,7 +222,7 @@ function _renderSessions(items) {
             return `
             <tr>
               <td style="font-family:var(--mono);font-size:11px">${esc((s.session_id || '').slice(0, 12))}\u2026</td>
-              <td style="font-size:11px;font-family:var(--mono)">${esc((s.app_id || '').slice(0, 12))}</td>
+              <td style="font-size:11px;font-family:var(--mono)">${esc(appName(s.app_id))}</td>
               <td style="font-size:11px"><span style="font-size:10px;padding:2px 6px;border-radius:3px;background:rgba(99,102,241,0.1);color:#6366f1">${esc(s.framework_tier || '\u2014')}</span></td>
               <td style="text-align:right;font-size:11px">${fmtNum(s.total_calls || 0)}</td>
               <td style="text-align:right;font-size:11px">${fmtNum(totalTokens)}</td>
@@ -272,7 +273,7 @@ function _renderAmplification(items) {
             const ratioColor = ratio >= 5 ? 'var(--danger)' : ratio >= 3 ? 'var(--warn)' : 'var(--accent)';
             return `<tr>
               <td style="font-weight:500;font-size:11px">${esc(a.node_label || '\u2014')}</td>
-              <td style="font-size:10px;font-family:var(--mono);color:var(--muted)">${esc((a.app_id || '').slice(0, 10))}</td>
+              <td style="font-size:10px;font-family:var(--mono);color:var(--muted)">${esc(appName(a.app_id))}</td>
               <td style="font-size:10px;font-family:var(--mono)">${esc(a.provider || '\u2014')} / ${esc(a.model || '\u2014')}</td>
               <td style="text-align:right;font-family:var(--mono);font-size:11px">${fmtCost(parseFloat(a.direct_cost || 0))}</td>
               <td style="text-align:right;font-family:var(--mono);font-size:11px">${fmtCost(parseFloat(a.attributed_cost || 0))}</td>
@@ -326,7 +327,7 @@ function _renderRetryTax(items) {
               const pct = parseFloat(a.retry_tax_pct || 0).toFixed(1);
               return `<tr>
                 <td style="font-weight:500;font-size:11px">${esc(a.node_label || '\u2014')}</td>
-                <td style="font-size:10px;font-family:var(--mono);color:var(--muted)">${esc((a.app_id || '').slice(0, 10))}</td>
+                <td style="font-size:10px;font-family:var(--mono);color:var(--muted)">${esc(appName(a.app_id))}</td>
                 <td style="text-align:right;font-family:var(--mono);font-size:11px">${fmtCost(direct)}</td>
                 <td style="text-align:right;font-family:var(--mono);color:var(--danger);font-size:11px">${fmtCost(cost)}</td>
                 <td style="text-align:right;font-family:var(--mono);font-size:11px">${pct}%</td>
@@ -380,7 +381,7 @@ function _renderDefensive(items) {
               const isDef = a.is_defensive ? 'guard' : 'fallback';
               return `<tr>
                 <td style="font-weight:500;font-size:11px">${esc(a.node_label || '\u2014')}</td>
-                <td style="font-size:10px;font-family:var(--mono);color:var(--muted)">${esc((a.app_id || '').slice(0, 10))}</td>
+                <td style="font-size:10px;font-family:var(--mono);color:var(--muted)">${esc(appName(a.app_id))}</td>
                 <td style="font-size:11px"><span style="font-size:10px;padding:2px 6px;border-radius:3px;background:rgba(168,85,247,0.1);color:#a855f7;white-space:nowrap">${isDef}</span></td>
                 <td style="text-align:right;font-family:var(--mono);font-size:11px">${fmtCost(direct)}</td>
                 <td style="text-align:right;font-family:var(--mono);font-size:11px;color:#a855f7">${fmtCost(cost)}</td>

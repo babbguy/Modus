@@ -148,6 +148,9 @@ class FinanceSummaryResponse(BaseModel):
     top_spenders: list[dict]
     spend_by_department: list[dict]
     recent_invoices: list[dict]
+    # % change of month-to-date spend vs the same elapsed span of the prior
+    # month (one decimal, signed). None when the prior span has no spend.
+    cost_trend_pct: Optional[str] = None
 
 
 class BillingConnectionRequest(BaseModel):
@@ -281,6 +284,20 @@ async def finance_summary(
     top_list.sort(key=lambda x: Decimal(x["spend_usd"]), reverse=True)
     overall_burn = (total_spend / total_budget * 100) if total_budget > 0 else _ZERO
 
+    # Trend: MTD vs the same elapsed span of the previous month.
+    prior_start = (month_start - timedelta(days=1)).replace(day=1)
+    prior_end = min(prior_start + (now - month_start), month_start)
+    prior_result = await db.execute(spend_q, {"start": sqlite_dt(prior_start), "end": sqlite_dt(prior_end)})
+    visible_team_ids = {str(team.id) for team, _cc, _tcc in team_rows}
+    prior_spend = sum(
+        (Decimal(str(r.cost)) for r in prior_result.all() if r.cost and str(r.team_id) in visible_team_ids),
+        _ZERO,
+    )
+    cost_trend_pct = (
+        str(((total_spend - prior_spend) / prior_spend * 100).quantize(Decimal("0.1")))
+        if prior_spend > 0 else None
+    )
+
     # Recent invoices
     inv_result = await db.execute(
         select(ChargebackInvoice)
@@ -316,6 +333,7 @@ async def finance_summary(
             for dept, spend in sorted(dept_spend.items(), key=lambda x: x[1], reverse=True)
         ],
         recent_invoices=recent_invoices,
+        cost_trend_pct=cost_trend_pct,
     )
 
 
@@ -616,6 +634,8 @@ async def get_chargeback(
         period_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         period_end = now
 
+    period_label = period or period_start.strftime("%Y-%m")
+
     q = text("""
         SELECT
             t.slug               AS team_slug,
@@ -653,6 +673,7 @@ async def get_chargeback(
             "team_name": r.team_name,
             "cost_center_code": r.cost_center_code,
             "department": r.department,
+            "period": period_label,
             "app_name": r.app_name,
             "provider": r.provider,
             "model": r.model,
