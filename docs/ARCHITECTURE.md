@@ -45,19 +45,87 @@ This document describes how the pieces fit together. For setup, see the
    Results are cached briefly. (`POST /api/v1/evaluate/` and its session
    endpoints are a second entry point for callers that are not using the SDK.) A `deny` or `throttle` raises
    `PolicyViolationError` in the application.
-3. After the call the SDK buffers usage records and flushes them in batches to
-   `POST /api/v1/ingest`. Ingest atomically updates real-time spend counters
-   (hourly, daily and monthly windows) so budget checks do not wait for the
-   periodic aggregation job.
+3. After the call the SDK buffers usage and flushes it to
+   `POST /api/v1/ingest` (see [Usage data pipeline](#usage-data-pipeline)).
+   Ingest updates the usage aggregates and the real-time spend counters
+   (hourly, daily and monthly windows) in the same transaction, so dashboards
+   and budget checks are current as soon as a batch is written.
 4. Periodic heartbeats (`POST /api/v1/heartbeat`) return the app's routing
    fingerprints.
-5. Background tasks aggregate usage, evaluate thresholds, run anomaly
+5. Background tasks reconcile the aggregates, evaluate thresholds, run anomaly
    detectors, calibrate routing, sync prices and (optionally) push to a
    Conductor.
 
 When the orchestrator is unreachable, the SDK behaviour is controlled by the
 SDK-side `MODUS_FAIL_OPEN` environment variable (default `true`: calls proceed;
-set `false` to deny them). The orchestrator-side `MODUS_ENFORCEMENT_FAIL_OPEN`
+set `false` to deny them). A `429` is not "unreachable": the SDK retries
+`evaluate` with jittered backoff inside its timeout, honours `Retry-After`,
+and if it is still rate limited it keeps enforcing the last decision the server
+gave for the same provider/model (for up to `MODUS_LAST_DECISION_TTL`, default
+300 s); only with no recent decision does `MODUS_FAIL_OPEN` apply. Rate
+limiting never opens the SDK circuit breaker.
+
+## Usage data pipeline
+
+**Single source of truth.** Usage is counted exactly once, when it is
+ingested:
+
+| Store | Holds | Source of truth for |
+|-------|-------|---------------------|
+| `usage_aggregates`, `granularity='hourly'` | per (app, team, provider, model, UTC hour) | usage inside the hourly retention window (`MODUS_HOURLY_AGGREGATE_RETENTION_DAYS`, default 7) |
+| `usage_aggregates`, `granularity='daily'` | per (app, team, provider, model, UTC day) | all totals by day, month, cost center; kept forever |
+| `usage_records` | per-call detail: raw-format records, SDK traces, session and span ids | sessions / attribution and per-call drill-down; never re-summed into totals |
+
+* The write-queue writer claims the payload's `batch_id` (`ingest_batches`)
+  and, **in the same transaction**, stores the detail records and adds the
+  batch's usage to the hourly row of each call's UTC hour *and* the daily row
+  of its UTC day. A retried batch id is skipped as a whole, so retries never
+  double count; `daily == sum(hourly)` holds by construction.
+* SDK aggregated payloads (`format: "aggregated"`): `aggregates` are counted
+  (each bucket covers one UTC hour); `traces` are detail only because the SDK
+  also folds every traced call into its bucket
+  (`traces_counted_in_aggregates: true`). For older SDKs without that flag,
+  policy-violation and error traces are counted, since those SDKs left them out
+  of the buckets.
+* Raw payloads (`records`), the gateway and the OTLP bridge: each record is
+  stored and counted.
+* Session and span ids travel in record metadata (`mds_session_id`,
+  `mds_call_id`, `mds_parent_id`, `mds_span_name`); ingest copies the session id
+  into `usage_records.session_id` for the Sessions view and the attribution
+  engine. In aggregated mode the SDK sends every call made inside
+  `agent.session()` as a trace so sessions are complete.
+* The aggregation task (`MODUS_AGGREGATE_INTERVAL_SECONDS`, default 60 s) never
+  adds anything: it recomputes today's and yesterday's daily rows from their
+  hourly rows and *replaces* any row that differs (a no-op on correct data).
+* Retention only deletes detail that the aggregates already hold: raw
+  `usage_records` after `MODUS_COMPACTION_AFTER_HOURS` (24 h), hourly rows after
+  `MODUS_HOURLY_AGGREGATE_RETENTION_DAYS`.
+* Readers sum **one** granularity per query (summing both would double count).
+  Dashboard KPIs, finance and reports read daily rows, which are current to the
+  last written batch, so overview month-to-date equals finance month-to-date.
+
+**SDK delivery.** Each flush is frozen into a payload with its own `batch_id`
+and kept until the orchestrator accepts it; a retry re-sends the identical
+payload, so a lost response cannot double count. `429`/`503` back off
+(`Retry-After` or exponential, with jitter); other `4xx` responses mean the
+payload is invalid and it is dropped with an error log. At most
+`MODUS_MAX_PENDING_BATCHES` (default 1000) payloads wait; beyond that the oldest
+is dropped with an error log.
+
+## API rate limits
+
+Per key (the `X-Modus-APIKey` header, otherwise the client IP), sliding window
+per minute, two classes; `0` disables a class. A `429` carries `Retry-After`.
+
+| Class | Routes | Default |
+|-------|--------|---------|
+| `sdk` | with an app credential (`mds_` key or `mst_` session token): `POST /api/v1/ingest`, `/heartbeat`, `/policy/evaluate`, `/routing/outcomes/batch`, `/topology`, `/governance/rewind-event`, `/v1/traces` (OTLP), and `GET /api/v1/policies` | `MODUS_RATE_LIMIT_SDK_PER_MINUTE=6000` + `MODUS_RATE_LIMIT_SDK_BURST=1000` |
+| `default` | every other `/api/*` request | `MODUS_RATE_LIMIT_PER_MINUTE=200` + `MODUS_RATE_LIMIT_BURST=50` |
+
+The SDK sends one `evaluate` per provider call that is not served from its
+short decision cache, plus a flush every 30 s and a heartbeat every 60 s, so
+the SDK class is sized for thousands of LLM calls per minute per app. Limits are
+per orchestrator process. The orchestrator-side `MODUS_ENFORCEMENT_FAIL_OPEN`
 (default `false`) separately decides what the gateway and `POST /api/v1/evaluate/`
 return when an evaluation times out or errors.
 
@@ -121,8 +189,11 @@ drift monitor flags profiles whose behaviour changes. Routing is controlled by
 
 ## Insights and governance
 
-* **Anomaly detection**: z-score scan over per-app daily aggregates (requires
-  PostgreSQL; it is skipped on SQLite) plus pattern detectors for repeated
+* **Anomaly detection**: z-score scan of each app's recent spend rate (last
+  1-2 hours of hourly aggregates, as a daily equivalent) against the mean and
+  population standard deviation of its daily spend over the baseline window.
+  Runs on SQLite and PostgreSQL (statistics computed with the Python stdlib).
+  Plus pattern detectors for repeated
   threshold breaches, model-trigger patterns, team spend anomalies and
   enforcement hotspots.
 * **Forecasting and reports**: spend forecasts, scheduled finance reports and

@@ -68,8 +68,8 @@ SQLite tables are created automatically. For PostgreSQL, point
 `MODUS_DATABASE_URL` at a `postgresql+asyncpg://` URL and run
 `alembic upgrade heads` first.
 
-Not every feature works on SQLite: the z-score anomaly scan requires
-PostgreSQL and is skipped on SQLite.
+All features, including the z-score anomaly scan and spend forecasts, run on
+both SQLite and PostgreSQL.
 
 ### Option 4: Production Compose files and install scripts (`deploy/`)
 
@@ -223,8 +223,15 @@ important ones:
 | `MODUS_PRICING_LIVE_FETCH_ENABLED` | `false` | Allow price refresh from provider APIs |
 | `MODUS_NOMUS_URL` | empty | Enable the optional Nomus integration |
 | `MODUS_CONDUCTOR_URL` | empty | Push aggregates to a Conductor (must resolve to a private address) |
+| `MODUS_RATE_LIMIT_SDK_PER_MINUTE` / `MODUS_RATE_LIMIT_SDK_BURST` | `6000` / `1000` | Per-app limit for SDK machine traffic (ingest, heartbeat, evaluate, ...); `0` disables |
+| `MODUS_RATE_LIMIT_PER_MINUTE` / `MODUS_RATE_LIMIT_BURST` | `200` / `50` | Per-key (or per-IP) limit for every other `/api/*` request; `0` disables |
+| `MODUS_AGGREGATE_INTERVAL_SECONDS` | `60` | How often the daily aggregates are reconciled against the hourly rows (usage itself is counted at ingest) |
+| `MODUS_COMPACTION_AFTER_HOURS` | `24` | Raw `usage_records` older than this are deleted (already counted in the aggregates) |
+| `MODUS_HOURLY_AGGREGATE_RETENTION_DAYS` | `7` | Hourly aggregates older than this are deleted; daily aggregates are kept |
 
-See `.env.example` for a longer list with comments.
+See `.env.example` for a longer list with comments, and
+[ARCHITECTURE.md](ARCHITECTURE.md#usage-data-pipeline) for how usage is
+aggregated and rate limited.
 
 ## Using the evaluate endpoint directly
 
