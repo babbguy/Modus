@@ -11,8 +11,8 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - run: pip install ruff==0.8.0
@@ -23,8 +23,8 @@ jobs:
     name: Dashboard JavaScript
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
         with:
           node-version: 22
       - name: Every dashboard module parses as an ES module
@@ -39,8 +39,8 @@ jobs:
     name: Type Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - run: pip install -r orchestrator/requirements.txt -r requirements-dev.txt
@@ -65,8 +65,8 @@ jobs:
     env:
       MODUS_DATABASE_URL: postgresql+asyncpg://modus:modus@localhost:5432/modus
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - run: pip install -r orchestrator/requirements.txt
@@ -88,8 +88,8 @@ jobs:
       MODUS_MASTER_API_KEY: mds_master_ci_test_key_placeholder_000
       MODUS_SECRET_KEY: test-secret-key-for-ci
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - run: pip install -r orchestrator/requirements.txt -r requirements-dev.txt
@@ -104,7 +104,7 @@ jobs:
         run: echo "All tests passed with exit code 0"
       - name: Upload coverage report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: coverage-report
           path: coverage.xml
