@@ -1,5 +1,5 @@
 """
-Modus Agent SDK v1.0.0
+Modus Agent SDK v1.1.0
 =============================
 AI cost governance for Python applications.
 
@@ -67,7 +67,7 @@ from urllib.error import HTTPError, URLError
 
 logger = logging.getLogger(__name__)
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 
 @lru_cache(maxsize=1)

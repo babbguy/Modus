@@ -41,7 +41,7 @@ class Settings(BaseSettings):
 
     # ── Application ────────────────────────────────────────────────────────────
     app_name: str = "Modus Orchestrator"
-    version: str = "1.0.0"
+    version: str = "1.1.0"
     environment: Literal["development", "staging", "production"] = "development"
     debug: bool = False
     disable_dashboard: bool = False

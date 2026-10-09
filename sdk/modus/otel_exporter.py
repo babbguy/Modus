@@ -138,7 +138,7 @@ def enable_otel_export(
     _provider = TracerProvider(resource=resource)
     _provider.add_span_processor(BatchSpanProcessor(trace_exporter))
     trace.set_tracer_provider(_provider)
-    _tracer = trace.get_tracer("modus", "1.0.0")
+    _tracer = trace.get_tracer("modus", "1.1.0")
 
     # Metrics provider
     reader = PeriodicExportingMetricReader(
@@ -147,7 +147,7 @@ def enable_otel_export(
     )
     _meter_provider = MeterProvider(resource=resource, metric_readers=[reader])
     metrics.set_meter_provider(_meter_provider)
-    _meter = metrics.get_meter("modus", "1.0.0")
+    _meter = metrics.get_meter("modus", "1.1.0")
 
     # Create metric instruments
     _cost_counter = _meter.create_counter(
