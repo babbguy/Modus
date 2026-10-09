@@ -25,11 +25,11 @@ jobs:
       matrix:
         db: [sqlite, postgres]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 22
       - name: Install the browser sweep (pinned Playwright + Chromium)
@@ -43,7 +43,7 @@ jobs:
         run: python e2e/run_gate.py --db ${{ matrix.db }} --image modus:gate --out e2e/out/${{ matrix.db }}
       - name: Upload screenshots and logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: release-gate-${{ matrix.db }}
           path: e2e/out/${{ matrix.db }}
