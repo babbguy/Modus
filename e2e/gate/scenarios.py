@@ -8,12 +8,11 @@ ledger and is part of the all-teams reconciliation.
 """
 from __future__ import annotations
 
-import threading
 import time
 from decimal import Decimal
 from typing import Callable, Optional
 
-from .common import Client, Results, wait_until
+from .common import Client, Results, log, wait_until
 from .traffic import SDK_LOG, Ledger, SdkApp, register_concurrently
 
 PHASE = "scenarios"
@@ -299,11 +298,23 @@ class Scenarios:
         """/api/v1/evaluate/ must answer with its fail-closed decision when the
         evaluation overruns MODUS_ENFORCEMENT_TIMEOUT_MS (500 ms), never a 5xx.
 
-        PostgreSQL: another session holds an exclusive lock on `apps` for 4 s
-        (a migration or maintenance query). SQLite in WAL mode never blocks
-        readers, so there the server is starved of CPU for 4 s instead (a
-        noisy neighbour on a small VPS): `docker update --cpus=0.02`.
+        PostgreSQL only: another session holds an exclusive lock on `apps` for
+        4 s (a migration or maintenance query), so the evaluation waits on I/O
+        past its budget -- a deterministic stall.
+
+        SQLite has no equivalent: WAL never blocks readers, an exclusive
+        locking mode cannot be taken while the server's pooled connections are
+        open, and CPU starvation is not deterministic (the event loop only
+        checks its timers when it gets CPU, so a starved evaluation often
+        completes in the same slice and is allowed). Rather than report a
+        result that depends on runner speed, the SQLite job records no check
+        here. The behaviour is covered by the PostgreSQL job and by
+        tests/test_commit_before_response.py (timeout and error fallbacks).
         """
+        if self.stack.db != "postgres":
+            log("evaluate timeout: not run on SQLite (no deterministic I/O stall); "
+                "covered by the PostgreSQL job and tests/test_commit_before_response.py")
+            return
         a = self.apps["denylist"]
         if not a.api_key:
             return
@@ -337,15 +348,7 @@ class Scenarios:
                 p.kill()
                 return None
             return "database lock", lambda: p.wait(timeout=60)
-        from .docker_env import CPU_LIMIT, docker
-        docker("update", "--cpus=0.02", self.stack.app)
-        timer = threading.Timer(seconds, lambda: docker("update", f"--cpus={CPU_LIMIT}", self.stack.app))
-        timer.start()
-
-        def release() -> None:
-            timer.join()
-            time.sleep(1)
-        return "CPU starvation", release
+        return None  # only PostgreSQL offers a deterministic stall (see evaluate_timeout)
 
     def stop(self) -> None:
         for a in self.apps.values():
