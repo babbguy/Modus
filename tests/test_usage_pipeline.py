@@ -459,10 +459,14 @@ async def test_sdk_traffic_is_not_throttled_at_normal_volume(client, registered_
     from orchestrator import main
     from orchestrator.core.config import settings
 
+    # A one-hour window: the limiter approximates a sliding window by weighting
+    # the previous fixed window, so with 60 s windows a slow CI run that crosses
+    # a minute boundary mid-burst can stay just under the limit (no 429). The
+    # limits themselves are the production per-window values.
     monkeypatch.setattr(main, "_rate_limiter", main._RateLimiter(
-        limit=settings.rate_limit_per_minute, burst=settings.rate_limit_burst))
+        limit=settings.rate_limit_per_minute, burst=settings.rate_limit_burst, window=3600))
     monkeypatch.setattr(main, "_sdk_rate_limiter", main._RateLimiter(
-        limit=settings.rate_limit_sdk_per_minute, burst=settings.rate_limit_sdk_burst))
+        limit=settings.rate_limit_sdk_per_minute, burst=settings.rate_limit_sdk_burst, window=3600))
 
     statuses = []
     for i in range(600):
