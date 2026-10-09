@@ -5,8 +5,8 @@ description: |
   Deploys the orchestrator, which also serves the dashboard.
   Requires an external PostgreSQL database.
 type: application
-version: 1.0.0
-appVersion: "1.0.0"
+version: 1.1.0
+appVersion: "1.1.0"
 
 keywords:
   - ai

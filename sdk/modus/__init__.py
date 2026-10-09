@@ -41,7 +41,7 @@ Diagnose any environment:
 from modus.agent import ModusAgent, PolicyViolationError
 from modus._bootstrap import _agent, get_agent  # noqa: F401
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 # ── Routing decorators ───────────────────────────────────────────────────────
 
