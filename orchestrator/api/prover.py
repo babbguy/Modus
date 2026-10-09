@@ -69,7 +69,7 @@ class BatchProofResponse(BaseModel):
 async def verify_policy(
     body: VerifyRequest,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Verify a policy YAML — returns proof certificate."""
     import asyncio
@@ -144,7 +144,7 @@ async def get_proof(
         variables_checked=row.variables_checked or 0,
         max_depth=row.max_depth or 0,
         solver_time_ms=row.solver_time_ms or 0,
-        proven_at=str(row.proven_at) if row.proven_at else "",
+        proven_at=row.proven_at.isoformat() if row.proven_at else "",
     )
 
 
@@ -152,7 +152,7 @@ async def get_proof(
 async def verify_batch(
     body: BatchVerifyRequest,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Verify multiple policies in one call."""
     import asyncio

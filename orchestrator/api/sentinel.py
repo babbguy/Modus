@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from orchestrator.core.auth import Identity, get_identity
+from orchestrator.core.auth import Identity, get_identity, team_scope_clause
 from orchestrator.db.models import TRiSMThreatEvent, TRiSMPattern
 from orchestrator.db.session import get_session, get_read_session
 
@@ -62,6 +62,7 @@ class ThreatEventResponse(BaseModel):
     confidence_score: float
     detection_method: str
     action_taken: str
+    app_id: Optional[str] = None
     rollback_plan_json: Optional[str] = None
     created_at: Optional[str] = None
 
@@ -69,10 +70,16 @@ class ThreatEventResponse(BaseModel):
         from_attributes = True
 
 
+# action_taken values that prevented the call or rolled it back
+_BLOCKING_ACTIONS = frozenset({"block", "terminate", "rewind"})
+
+
 class ThreatStatsResponse(BaseModel):
     total_threats: int
     by_type: dict
     by_severity: dict
+    by_action: dict = {}      # action_taken -> count
+    blocked_threats: int = 0  # events whose action stopped or rolled back the call
     avg_confidence: float
 
 
@@ -100,7 +107,7 @@ class PatternUpdateRequest(BaseModel):
 async def scan_session(
     body: ScanRequest,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """On-demand TRiSM scan of a session trace."""
     import json
@@ -164,8 +171,7 @@ async def list_threats(
         q = q.where(TRiSMThreatEvent.severity == severity)
     if threat_type:
         q = q.where(TRiSMThreatEvent.threat_type == threat_type)
-    if not identity.is_platform_admin:
-        q = q.where(TRiSMThreatEvent.team_id == identity.team_id)
+    q = q.where(team_scope_clause(TRiSMThreatEvent.team_id, identity.visible_team_ids()))
 
     q = q.offset(offset).limit(limit)
     result = await db.execute(q)
@@ -180,8 +186,9 @@ async def list_threats(
             confidence_score=r.confidence_score,
             detection_method=r.detection_method,
             action_taken=r.action_taken,
+            app_id=str(r.app_id) if r.app_id else None,
             rollback_plan_json=r.rollback_plan_json,
-            created_at=str(r.created_at) if r.created_at else None,
+            created_at=r.created_at.isoformat() if r.created_at else None,
         )
         for r in rows
     ]
@@ -197,7 +204,7 @@ async def get_threat(
     event = await db.get(TRiSMThreatEvent, threat_id)
     if event is None:
         raise HTTPException(404, "Threat event not found")
-    if not identity.is_platform_admin and str(event.team_id) != identity.team_id:
+    if not identity.can_access_team(str(event.team_id)):
         raise HTTPException(403, "Access denied")
 
     return ThreatEventResponse(
@@ -208,8 +215,9 @@ async def get_threat(
         confidence_score=event.confidence_score,
         detection_method=event.detection_method,
         action_taken=event.action_taken,
+        app_id=str(event.app_id) if event.app_id else None,
         rollback_plan_json=event.rollback_plan_json,
-        created_at=str(event.created_at) if event.created_at else None,
+        created_at=event.created_at.isoformat() if event.created_at else None,
     )
 
 
@@ -217,7 +225,7 @@ async def get_threat(
 async def execute_rollback(
     threat_id: str,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Execute the auto-generated rollback plan for a threat."""
     event = await db.get(TRiSMThreatEvent, threat_id)
@@ -244,37 +252,34 @@ async def threat_stats(
     identity: Identity = Depends(get_identity),
     db: AsyncSession = Depends(get_read_session),
 ):
-    """Return aggregate threat statistics."""
+    """Return aggregate threat statistics for the teams the caller can see."""
+    scope = team_scope_clause(TRiSMThreatEvent.team_id, identity.visible_team_ids())
+
     total = await db.scalar(
-        select(func.count(TRiSMThreatEvent.id))
+        select(func.count(TRiSMThreatEvent.id)).where(scope)
     ) or 0
 
     avg_conf = await db.scalar(
-        select(func.avg(TRiSMThreatEvent.confidence_score))
+        select(func.avg(TRiSMThreatEvent.confidence_score)).where(scope)
     ) or 0.0
 
-    # Get counts by type
-    type_rows = await db.execute(
-        select(
-            TRiSMThreatEvent.threat_type,
-            func.count(TRiSMThreatEvent.id),
-        ).group_by(TRiSMThreatEvent.threat_type)
-    )
-    by_type = {row[0]: row[1] for row in type_rows.all()}
+    async def _counts(column) -> dict:
+        rows = await db.execute(
+            select(column, func.count(TRiSMThreatEvent.id)).where(scope).group_by(column)
+        )
+        return {row[0]: row[1] for row in rows.all()}
 
-    # Get counts by severity
-    sev_rows = await db.execute(
-        select(
-            TRiSMThreatEvent.severity,
-            func.count(TRiSMThreatEvent.id),
-        ).group_by(TRiSMThreatEvent.severity)
-    )
-    by_severity = {row[0]: row[1] for row in sev_rows.all()}
+    by_type = await _counts(TRiSMThreatEvent.threat_type)
+    by_severity = await _counts(TRiSMThreatEvent.severity)
+    by_action = await _counts(TRiSMThreatEvent.action_taken)
+    blocked = sum(n for action, n in by_action.items() if action in _BLOCKING_ACTIONS)
 
     return ThreatStatsResponse(
         total_threats=total,
         by_type=by_type,
         by_severity=by_severity,
+        by_action=by_action,
+        blocked_threats=blocked,
         avg_confidence=round(float(avg_conf), 4),
     )
 
@@ -296,7 +301,7 @@ async def update_pattern(
     pattern_id: str,
     body: PatternUpdateRequest,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Enable/disable or tune a TRiSM detection pattern."""
     if not identity.is_platform_admin:

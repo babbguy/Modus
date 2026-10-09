@@ -6,8 +6,18 @@ from __future__ import annotations
 
 
 def test_version():
+    """The SDK reports the version it is packaged as (sdk/pyproject.toml), and
+    every module that carries its own copy agrees."""
+    import re
+    from pathlib import Path
+
     import modus
-    assert modus.__version__ == "1.0.0"
+    from modus import agent
+
+    pyproject = (Path(__file__).resolve().parents[1] / "sdk" / "pyproject.toml").read_text(encoding="utf-8")
+    packaged = re.search(r'^version = "([^"]+)"$', pyproject, re.M).group(1)
+    assert modus.__version__ == packaged
+    assert agent.__version__ == packaged
 
 
 def test_exports():

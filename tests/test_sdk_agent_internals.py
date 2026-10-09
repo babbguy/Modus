@@ -261,8 +261,8 @@ class TestFlushRaw:
         records = [_make_record()]
         agent._records = records[:]
         agent._flush_raw()
-        # Records should be re-queued
-        assert len(agent._records) == 1
+        # Kept as a pending batch for an idempotent retry
+        assert len(agent._pending_batches) == 1
 
     def test_flush_raw_no_api_key(self):
         agent = _make_agent(aggregation_enabled=False)
@@ -319,13 +319,17 @@ class TestFlushAggregated:
 
         agent._flush_aggregated()
 
-        # Re-queued
-        assert len(agent._agg_buckets) == 1
-        assert len(agent._agg_sampled) == 1
+        # Kept as one pending batch (aggregates + traces) for an idempotent retry
+        assert len(agent._pending_batches) == 1
+        body = json.loads(agent._pending_batches[0].body)
+        assert len(body["aggregates"]) == 1
+        assert len(body["traces"]) == 1
 
     @patch("sdk.modus.agent._urlopen_tls", side_effect=Exception("fail"))
     def test_flush_aggregated_failure_merges_existing(self, mock_urlopen):
-        """When flush fails and a bucket already exists, merge counts."""
+        """A failed flush is retried with the SAME batch_id, never merged back
+        into the live buckets under a new one (which double counted when the
+        first attempt had actually been accepted)."""
         agent = _make_agent(aggregation_enabled=True)
         agent._api_key = "ak_test"
         # Pre-existing bucket
@@ -344,11 +348,16 @@ class TestFlushAggregated:
 
         agent._flush_aggregated()
 
-        # Now add a new bucket with same key to simulate concurrent accumulation
-        # The failed bucket should have been re-queued
-        requeued = agent._agg_buckets.get("openai:gpt-4o:chat:llm_call")
-        assert requeued is not None
-        assert requeued.call_count >= 1
+        assert agent._agg_buckets == {}
+        assert len(agent._pending_batches) == 1
+        first_id = agent._pending_batches[0].batch_id
+
+        # New usage accumulates into a NEW batch; the failed one keeps its id
+        agent._agg_buckets["openai:gpt-4o:chat:llm_call"] = existing
+        agent._ingest_backoff_until = 0.0
+        agent._flush_aggregated()
+        assert [pb.batch_id for pb in agent._pending_batches][0] == first_id
+        assert len(agent._pending_batches) == 2
 
 
 # ── Flush routing outcomes ───────────────────────────────────────────────────

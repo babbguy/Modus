@@ -1,0 +1,10 @@
+{
+  "name": "modus-release-gate",
+  "private": true,
+  "description": "Browser sweep for the Modus release gate (see e2e/README.md).",
+  "license": "Apache-2.0",
+  "type": "module",
+  "dependencies": {
+    "playwright": "1.62.0"
+  }
+}

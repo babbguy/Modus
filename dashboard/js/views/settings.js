@@ -98,7 +98,8 @@ function _renderSettings(ver) {
   const gsUrl = gs.nomus_url || '';
   const gsVersion = gs.version || null;
   const gsLastSync = gs.last_sync ? new Date(gs.last_sync).toLocaleString() : null;
-  const gsRegsCount = gs.regulations_count || 0;
+  const gsRegsCount = gs.regulation_count || 0;
+  const gsRulesCount = gs.policy_count || 0;
   const gsAutoSync = gs.auto_sync !== false;
   let gsStatusColor = 'var(--muted)';
   let gsStatusLabel = 'Not Configured';
@@ -195,7 +196,7 @@ function _renderSettings(ver) {
           ${gsLastSync ? '<div class="settings-row"><span class="settings-label">Last Sync</span><span class="settings-value" style="font-family:var(--mono);font-size:11px">' + gsLastSync + '</span></div>' : ''}
           <div class="settings-row">
             <span class="settings-label">Regulations</span>
-            <span class="settings-value" style="font-family:var(--mono)">${gsRegsCount} loaded</span>
+            <span class="settings-value" style="font-family:var(--mono)">${gsRegsCount} loaded${gsRulesCount ? ` (${gsRulesCount} rules)` : ''}</span>
           </div>
           <div class="settings-row">
             <label class="settings-label">Auto-Sync</label>
@@ -468,7 +469,7 @@ async function _syncNomusRuleset() {
     const resp = await rawFetch('/api/v1/admin/nomus/sync', { method: 'POST' });
     const data = await resp.json();
     if (data.success) {
-      statusEl.innerHTML = `<span style="color:var(--accent)">Synced v${esc(data.version || '?')} \u2014 ${data.regulations_count} regulations, ${data.rules} rules.</span>`;
+      statusEl.innerHTML = `<span style="color:var(--accent)">Synced v${esc(data.version || '?')} \u2014 ${data.regulation_count} regulations, ${data.policy_count} rules.</span>`;
       // Refresh the view after a short delay
       setTimeout(() => { if (!_destroyed) _loadData(); }, 1500);
     } else {

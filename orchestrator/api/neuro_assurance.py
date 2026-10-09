@@ -115,7 +115,7 @@ async def get_report(
     app_id: str,
     lookback_hours: int = Query(24, ge=1, le=720),
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> NeuroReportResponse:
     """Generate or retrieve a compliance report for an app."""
     identity.assert_permission("evaluate:read")

@@ -91,3 +91,7 @@ data/
 
 # Local-only development stack (not part of the published project)
 deploy/compose/
+
+# Release gate (e2e/) artifacts and the pinned Playwright install
+e2e/out/
+e2e/node_modules/

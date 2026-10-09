@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from orchestrator.core.auth import Identity, get_identity
+from orchestrator.core.auth import Identity, get_identity, team_scope_clause
 from orchestrator.db.models import TrajectoryProof
 from orchestrator.db.session import get_read_session
 
@@ -73,6 +73,7 @@ class ProofStatsResponse(BaseModel):
     invalid_proofs: int
     avg_prover_time_ms: float
     avg_circuit_size: float
+    coverage: float = 0.0  # valid_proofs / total_proofs, 0-1
 
 
 # ── Endpoints ────────────────────────────────────────────────────────────────
@@ -151,7 +152,7 @@ async def list_proofs(
             public_inputs=None,
             circuit_size=r.circuit_size,
             prover_time_ms=r.prover_time_ms,
-            created_at=str(r.created_at) if r.created_at else "",
+            created_at=r.created_at.isoformat() if r.created_at else "",
         )
         for r in rows
     ]
@@ -162,27 +163,29 @@ async def proof_stats(
     identity: Identity = Depends(get_identity),
     db: AsyncSession = Depends(get_read_session),
 ):
-    """Return aggregate proof statistics."""
+    """Return aggregate proof statistics for the teams the caller can see."""
+    scope = team_scope_clause(TrajectoryProof.team_id, identity.visible_team_ids())
+
     total = await db.scalar(
-        select(func.count(TrajectoryProof.id))
+        select(func.count(TrajectoryProof.id)).where(scope)
     ) or 0
 
     valid = await db.scalar(
         select(func.count(TrajectoryProof.id))
-        .where(TrajectoryProof.proof_status == "valid")
+        .where(scope, TrajectoryProof.proof_status == "valid")
     ) or 0
 
     invalid = await db.scalar(
         select(func.count(TrajectoryProof.id))
-        .where(TrajectoryProof.proof_status == "invalid")
+        .where(scope, TrajectoryProof.proof_status == "invalid")
     ) or 0
 
     avg_time = await db.scalar(
-        select(func.avg(TrajectoryProof.prover_time_ms))
+        select(func.avg(TrajectoryProof.prover_time_ms)).where(scope)
     ) or 0.0
 
     avg_circuit = await db.scalar(
-        select(func.avg(TrajectoryProof.circuit_size))
+        select(func.avg(TrajectoryProof.circuit_size)).where(scope)
     ) or 0.0
 
     return ProofStatsResponse(
@@ -191,4 +194,5 @@ async def proof_stats(
         invalid_proofs=invalid,
         avg_prover_time_ms=round(float(avg_time), 2),
         avg_circuit_size=round(float(avg_circuit), 2),
+        coverage=round(valid / total, 4) if total else 0.0,
     )

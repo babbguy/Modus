@@ -81,6 +81,26 @@ function _notifyIfUnauthorized(resp) {
   return resp;
 }
 
+// ── App display names ───────────────────────────────────────────
+// Several endpoints (rewind events, routing fingerprints, alerts, sessions)
+// identify an app by its internal UUID. Views resolve that to the app's name
+// from GET /apps so tables never show a bare UUID.
+const _appNames = new Map();
+
+/** Load (or refresh) the UUID -> app name map. Never throws. */
+export async function loadAppNames() {
+  try {
+    const resp = await rawFetch('/api/v1/apps?active_only=false&limit=500');
+    if (!resp.ok) return;
+    for (const a of await resp.json()) _appNames.set(a.id, a.app_name || a.app_id);
+  } catch (_) { /* names are cosmetic; fall back to the id */ }
+}
+
+/** Display name for an app UUID (the id itself when unknown, '' when absent). */
+export function appName(uuid) {
+  return (uuid && _appNames.get(uuid)) || uuid || '';
+}
+
 /**
  * Convenience accessor for the API base URL.
  * @returns {string}

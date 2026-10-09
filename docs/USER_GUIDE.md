@@ -23,6 +23,7 @@
    - 3.8 [Notifications](#38-notifications)
    - 3.9 [Topology](#39-topology)
    - 3.10 [Governance](#310-governance)
+   - 3.11 [Teams](#311-teams)
 4. [Common Tasks](#4-common-tasks)
 5. [Glossary of Metrics](#5-glossary-of-metrics)
 6. [Troubleshooting](#6-troubleshooting)
@@ -263,6 +264,37 @@ and issues.
 health, and a list of recent failures with the error reason. If alerts
 aren't reaching your Slack channel, this is where you'll see why.
 
+**Delivery results.** When an alert fires it is committed first; only then
+is it delivered. Each channel's outcome is stored on the alert as
+`{status: "delivered" | "dead_letter", success, error}` and as a durable
+`notification_deliveries` row (dead-lettered rows keep the payload for replay).
+`notification_sent` is true when at least one channel delivered. Delivery
+Health counts an alert as failed if any channel failed. Channels only receive
+alerts at or above their minimum severity (`warning` by default, so the 70%
+"caution" tier is recorded but not sent).
+
+### 3.8a Alerts and rules
+
+**Alerts & Rules** lists fired alerts and the rules (thresholds) that produce
+them. Use **+ New Rule** to create a rule: pick a team, a scope (team, app or
+provider), the metric (cost, input tokens, output tokens, calls), the period,
+an optional warning value and a required critical value. A rule fires at 70%
+(caution), 90% (warning, or your warning value) and 100% (critical) of the
+critical value, once per period and tier. The critical value must be above 0
+and the warning value below it. Use **Edit** to change the name, values or
+active state, and **Delete** to retire a rule. Per-user and per-cost-center
+scopes exist in the API but cannot be measured yet, so those rules are skipped
+with a log warning rather than firing team-wide.
+
+### 3.8b Connections
+
+**Connections** shows every outbound dependency (AI providers, Nomus,
+Federation, gateway upstreams and your notification channels) and **Test**
+checks one live. Endpoints are always shown masked; Test uses the real stored
+URL. A connection is **Connected**, **Degraded** (reachable but slow, at
+1500 ms or more, answering 5xx, or failing 2 of its last 4 checks) or
+**Error** (unreachable). The reason is shown on the card and as a tooltip.
+
 ### 3.9 Topology
 
 Live map of your apps, AI providers, frameworks, and service dependencies.
@@ -272,6 +304,36 @@ Useful for compliance reviews ("show me everything that touches AI").
 
 The chain-of-thought ledger and constitutional AI decisions. Used for
 regulatory audit trails and post-incident review.
+
+### 3.11 Teams
+
+Teams own apps and are the unit budgets, policies and registration tokens
+attach to. Open **Teams** to create, edit, delete and restore them.
+
+**Edit**: Name, slug, description, department, parent team, budgets (overall,
+monthly, quarterly), budget period and cost center. Slugs are unique across all
+teams, including deleted ones. A team cannot be its own parent or sit under one
+of its own descendants. Budgets must be zero or more, with up to 8 decimals.
+
+**Delete**: Deleting is a soft delete, so usage, cost and audit history stay.
+If the team still has apps you must choose what happens to them: move them to
+another team (their policies, thresholds and live spend counters move too, and
+new usage is attributed to the new team), or deactivate them (their API keys
+stop working). Child teams must be moved under another team. The team's
+registration token is always revoked, so no new agent can self-register into it.
+Through the API this is `DELETE /api/v1/teams/{id}` with `reassign_to`,
+`cascade=true` and `reassign_children_to`; without them a team that still has
+apps or child teams is refused with a 409.
+
+**Restore**: Tick **Show deleted teams** and press **Restore**. Apps that were
+moved or deactivated are not brought back, and the registration token must be
+generated again. If the former parent team was deleted too, the restored team
+becomes top level.
+
+API: `GET /api/v1/teams/{id}`, `PATCH /api/v1/teams/{id}`,
+`DELETE /api/v1/teams/{id}`, `POST /api/v1/teams/{id}/restore` and
+`GET /api/v1/teams?include_deleted=true` (platform admins). Money is sent and
+returned as decimal strings. Every change is written to the audit log.
 
 ---
 

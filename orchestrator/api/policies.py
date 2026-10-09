@@ -210,7 +210,7 @@ class RealTimeSpendResponse(BaseModel):
 async def policy_evaluate(
     body: EvaluateRequestBody,
     raw_key: str = Depends(get_app_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> EvaluateResponse:
     t_start = time.perf_counter()
 
@@ -266,7 +266,7 @@ async def list_policies(
     app_id: Optional[str] = None,
     active_only: bool = True,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> list[PolicyResponse]:
     q = select(GovernancePolicy)
 
@@ -329,7 +329,7 @@ class PolicySyncResponse(BaseModel):
 )
 async def sync_policies(
     raw_key: str = Depends(get_app_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> PolicySyncResponse:
     """Agent-facing endpoint to fetch active policies for local enforcement."""
     app = await _verify_app_key(raw_key, db)
@@ -352,6 +352,8 @@ async def sync_policies(
             "policy_type": p.policy_type,
             "effect": p.effect,
             "priority": p.priority,
+            "scope": p.scope,
+            "conditions": p.conditions,
             "config": p.config,
             "action": p.action,
             "suggested_model": p.suggested_model,
@@ -373,7 +375,7 @@ async def create_policy(
     body: PolicyCreate,
     request: Request,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> PolicyResponse:
     identity.assert_permission("policies:write")
 
@@ -453,7 +455,7 @@ async def update_policy(
     body: PolicyUpdate,
     request: Request,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> PolicyResponse:
     identity.assert_permission("policies:write")
 
@@ -523,7 +525,7 @@ async def deactivate_policy(
     policy_id: str,
     request: Request,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> None:
     identity.assert_permission("policies:delete")
 
@@ -565,7 +567,7 @@ async def list_decisions(
     decision: Optional[str] = None,
     limit: int = Query(50, ge=1, le=500),
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> list[PolicyDecisionResponse]:
     q = (
         select(PolicyDecision, GovernancePolicy.name.label("policy_name"))
@@ -625,7 +627,7 @@ async def list_decisions(
 async def get_real_time_spend(
     app_id: str,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> list[RealTimeSpendResponse]:
     # Verify app exists and caller can see it
     app = await db.get(App, app_id)
@@ -677,7 +679,7 @@ async def set_enforcement_state(
     body: EnforcementStateUpdate,
     request: Request,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> dict:
     identity.assert_permission("policies:write")
 
@@ -842,7 +844,7 @@ def _validate_policy_config_values(policy_type: str, config: dict) -> None:
 async def get_ladder_status(
     team_id: Optional[str] = None,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """
     Returns the current degradation ladder status for each team with an active
@@ -1022,7 +1024,7 @@ async def batch_apply_policies(
     body: BatchApplyRequest,
     request: Request,
     identity: Identity = Depends(get_identity),
-    session: AsyncSession = Depends(get_session),
+    session: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Apply a batch of policies from a modus-policy.yaml file."""
     import uuid
@@ -1263,7 +1265,7 @@ async def batch_apply_policies(
 async def export_policies(
     scope: Optional[str] = Query(None, pattern="^(platform|team|app)$"),
     identity: Identity = Depends(get_identity),
-    session: AsyncSession = Depends(get_session),
+    session: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Export active policies in Budget-as-Code format."""
     q = select(GovernancePolicy).where(GovernancePolicy.is_active == True)

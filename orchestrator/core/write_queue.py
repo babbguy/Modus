@@ -43,7 +43,20 @@ _flush_permanently_lost = _LostItemCounter()
 
 @dataclass
 class IngestItem:
-    """A validated batch of usage records ready for DB insert."""
+    """A validated ingest batch: detail records to store plus the usage it adds.
+
+    The writer claims ``batch_id`` and, in the same transaction, stores
+    ``records`` and adds the batch's usage to the hourly and daily aggregates
+    (see orchestrator/core/usage_rollup.py). A re-sent batch id is skipped,
+    so a batch is counted exactly once.
+
+    Usage counted for the batch:
+      * ``usage`` when given: explicit increments (the SDK's pre-aggregated
+        summaries plus any traces that are not already in them);
+      * otherwise one increment per entry of ``records`` when
+        ``count_records`` is True (raw-format ingest, gateway, OTLP);
+      * nothing when ``count_records`` is False and ``usage`` is None.
+    """
     app_id: str
     team_id: str
     batch_id: str
@@ -55,6 +68,9 @@ class IngestItem:
     total_input_tokens: int = 0
     total_output_tokens: int = 0
     total_duration_ms: int = 0
+    usage: Optional[list[dict]] = None
+    count_records: bool = True
+    source: str = "ingest"
 
 
 @dataclass
@@ -85,30 +101,15 @@ class PolicyDecisionItem:
 
 
 @dataclass
-class AggregationItem:
-    """Pre-computed aggregate rows to upsert. Serialized through the write queue
-    so aggregator writes never compete with ingest/heartbeat for the SQLite lock."""
-    rows: list[dict]           # each dict has the full UsageAggregate column values
-    granularity: str           # "hourly" or "daily"
+class ReconcileItem:
+    """Recompute daily aggregates from hourly rows for the given UTC days.
 
-
-@dataclass
-class RegistrationItem:
-    """App registration write-behind item.
-
-    The endpoint generates the key and validates uniqueness (reads).
-    The actual INSERT (app row + audit log) is batched here.
+    Serialized through the write queue so it never races ingest for the
+    SQLite lock. ``prune_hourly`` deletes the days' hourly rows afterwards
+    (retention). See usage_rollup.reconcile_daily for the semantics.
     """
-    app_uuid: str        # pre-generated UUID for the app row
-    team_id: str
-    team_slug: str       # for auto-create if needed
-    app_id: str          # user-facing app identifier
-    app_name: str
-    environment: str
-    api_key_hash: str
-    api_key_prefix: str
-    actor_ip: Optional[str] = None
-    pending_key: Optional[str] = None  # "team_id:app_id" for cleanup after flush
+    days: list[datetime]
+    prune_hourly: bool = False
 
 
 # ── Phase 9 write items ─────────────────────────────────────────────────────
@@ -182,8 +183,8 @@ def queue_over_pressure() -> bool:
 
 async def enqueue(
     item: (
-        IngestItem | HeartbeatItem | PolicyDecisionItem | AggregationItem
-        | RegistrationItem | PoELedgerItem | NeuroAssuranceItem
+        IngestItem | HeartbeatItem | PolicyDecisionItem | ReconcileItem
+        | PoELedgerItem | NeuroAssuranceItem
     ),
 ) -> bool:
     """
@@ -277,12 +278,11 @@ async def _flush_batch(items: list, _is_retry: bool = False) -> None:
 
     from orchestrator.db.session import _session_factory
     from orchestrator.db.models import UsageRecord, IngestBatch, AgentHeartbeat, App, AuditLog
-    from sqlalchemy import update as sa_update, func
+    from sqlalchemy import update as sa_update
 
     start = time.perf_counter()
     ingest_count = 0
     heartbeat_count = 0
-    registration_count = 0
     record_count = 0
 
     try:
@@ -312,26 +312,41 @@ async def _flush_batch(items: list, _is_retry: bool = False) -> None:
                             extra={"batch_id": item.batch_id, "app_id": item.app_id},
                         )
                         continue
-                    # Insert all usage records
+                    # Insert all detail records
                     for rec in item.records:
                         db.add(UsageRecord(**rec))
                     record_count += item.record_count
                     ingest_count += 1
 
-                    # Update real-time spend counters
-                    if item.record_count > 0:
+                    # Count the batch's usage exactly once, in this same
+                    # transaction as the batch-id claim: hourly + daily rows.
+                    from orchestrator.core.usage_rollup import (
+                        apply_increments, increment_totals, increments_from_records,
+                    )
+                    if item.usage is not None:
+                        increments = item.usage
+                    elif item.count_records:
+                        increments = increments_from_records(item.records)
+                    else:
+                        increments = []
+                    await apply_increments(db, increments, source=item.source)
+
+                    # Real-time spend counters move by the same increments.
+                    totals = increment_totals(increments)
+                    if totals["call_count"] > 0:
                         try:
                             from orchestrator.core.policy_engine import update_real_time_spend
-                            await update_real_time_spend(
-                                app_id=item.app_id,
-                                team_id=item.team_id,
-                                total_cost=item.total_cost,
-                                call_count=item.record_count,
-                                input_tokens=item.total_input_tokens,
-                                output_tokens=item.total_output_tokens,
-                                total_duration_ms=item.total_duration_ms,
-                                db=db,
-                            )
+                            async with db.begin_nested():
+                                await update_real_time_spend(
+                                    app_id=item.app_id,
+                                    team_id=item.team_id,
+                                    total_cost=totals["total_cost"],
+                                    call_count=totals["call_count"],
+                                    input_tokens=totals["input_tokens"],
+                                    output_tokens=totals["output_tokens"],
+                                    total_duration_ms=totals["duration_ms_sum"],
+                                    db=db,
+                                )
                         except Exception:
                             logger.warning(
                                 "RealTimeSpend update failed for app=%s team=%s — policy enforcement may use stale counters",
@@ -358,89 +373,22 @@ async def _flush_batch(items: list, _is_retry: bool = False) -> None:
                     )
                     heartbeat_count += 1
 
-                elif isinstance(item, AggregationItem):
-                    from orchestrator.db.models import UsageAggregate
-
-                    # Detect dialect to use correct upsert syntax
-                    _dialect_name = db.bind.dialect.name if db.bind else "sqlite"
-                    if _dialect_name == "postgresql":
-                        from sqlalchemy.dialects.postgresql import insert as dialect_insert
-                        _scalar_least, _scalar_greatest = func.least, func.greatest
-                    else:
-                        from sqlalchemy.dialects.sqlite import insert as dialect_insert
-                        _scalar_least, _scalar_greatest = func.min, func.max
-
-                    # Additive columns: accumulate on conflict (existing + new)
-                    _additive_cols = (
-                        "call_count", "input_tokens", "output_tokens",
-                        "total_tokens", "input_cost", "output_cost",
-                        "total_cost", "duration_ms_sum",
-                    )
-                    for agg_row in item.rows:
-                        stmt = dialect_insert(UsageAggregate).values(**agg_row)
-                        # Build SET clause: additive cols use existing + excluded
-                        update_set: dict = {"computed_at": func.now()}
-                        for col in _additive_cols:
-                            if col in agg_row:
-                                update_set[col] = (
-                                    getattr(UsageAggregate, col) + stmt.excluded[col]
-                                )
-                        # Fold min/max with the stored value. Scalar two-argument
-                        # min/max is LEAST/GREATEST on PostgreSQL and min/max on
-                        # SQLite; coalesce so a NULL stored value never wins.
-                        if agg_row.get("min_duration_ms") is not None:
-                            new_min = stmt.excluded.min_duration_ms
-                            update_set["min_duration_ms"] = _scalar_least(
-                                func.coalesce(UsageAggregate.min_duration_ms, new_min),
-                                new_min,
+                elif isinstance(item, ReconcileItem):
+                    # Safety net, never fatal for the other items in this
+                    # flush: runs in a SAVEPOINT and only logs on failure.
+                    from orchestrator.core.usage_rollup import reconcile_daily
+                    try:
+                        async with db.begin_nested():
+                            res = await reconcile_daily(
+                                db, item.days, prune_hourly=item.prune_hourly,
                             )
-                        if agg_row.get("max_duration_ms") is not None:
-                            new_max = stmt.excluded.max_duration_ms
-                            update_set["max_duration_ms"] = _scalar_greatest(
-                                func.coalesce(UsageAggregate.max_duration_ms, new_max),
-                                new_max,
+                        if res.keys_repaired or res.hourly_rows_pruned:
+                            logger.info(
+                                "Aggregate reconciliation: %d keys repaired, %d hourly rows pruned",
+                                res.keys_repaired, res.hourly_rows_pruned,
                             )
-                        # Recompute avg from accumulated sum and count
-                        # Use nullif to avoid division by zero — returns NULL when count is 0
-                        update_set["avg_duration_ms"] = (
-                            (UsageAggregate.duration_ms_sum + stmt.excluded.duration_ms_sum)
-                            / func.nullif(
-                                UsageAggregate.call_count + stmt.excluded.call_count, 0
-                            )
-                        )
-                        if agg_row.get("source"):
-                            update_set["source"] = agg_row["source"]
-
-                        stmt = stmt.on_conflict_do_update(
-                            index_elements=[
-                                "app_id", "team_id", "provider", "model",
-                                "period_start", "granularity",
-                            ],
-                            set_=update_set,
-                        )
-                        await db.execute(stmt)
-
-                    # Update real-time spend for policy evaluation
-                    if item.rows:
-                        try:
-                            from orchestrator.core.policy_engine import update_real_time_spend
-                            # Sum across all rows in this aggregation batch
-                            for agg_row in item.rows:
-                                await update_real_time_spend(
-                                    app_id=agg_row["app_id"],
-                                    team_id=agg_row["team_id"],
-                                    total_cost=agg_row.get("total_cost", Decimal("0")),
-                                    call_count=agg_row.get("call_count", 0),
-                                    input_tokens=agg_row.get("input_tokens", 0),
-                                    output_tokens=agg_row.get("output_tokens", 0),
-                                    total_duration_ms=agg_row.get("duration_ms_sum", 0),
-                                    db=db,
-                                )
-                        except Exception:
-                            logger.warning(
-                                "RealTimeSpend aggregation update failed — policy enforcement may use stale counters",
-                                exc_info=True,
-                            )
+                    except Exception:
+                        logger.error("Aggregate reconciliation failed", exc_info=True)
 
                 elif isinstance(item, PolicyDecisionItem):
                     from orchestrator.db.models import PolicyDecision
@@ -477,27 +425,6 @@ async def _flush_batch(items: list, _is_retry: bool = False) -> None:
                         },
                     ))
 
-                elif isinstance(item, RegistrationItem):
-                    db.add(App(
-                        id=item.app_uuid,
-                        team_id=item.team_id,
-                        app_id=item.app_id,
-                        app_name=item.app_name,
-                        environment=item.environment,
-                        api_key_hash=item.api_key_hash,
-                        api_key_prefix=item.api_key_prefix,
-                    ))
-                    db.add(AuditLog(
-                        actor_id="master-key",
-                        actor_ip=item.actor_ip,
-                        team_id=item.team_id,
-                        resource_type="app",
-                        resource_id=item.app_uuid,
-                        action="registered",
-                        after={"app_id": item.app_id, "team": item.team_slug, "environment": item.environment},
-                    ))
-                    registration_count += 1
-
                 # ── Phase 9 items ────────────────────────────────────
                 elif isinstance(item, PoELedgerItem):
                     from orchestrator.db.models import PoELedgerEntry
@@ -533,36 +460,14 @@ async def _flush_batch(items: list, _is_retry: bool = False) -> None:
 
             await db.commit()
 
-        # Clean up pending registration keys after successful commit
-        pending_keys = [
-            item.pending_key for item in items
-            if isinstance(item, RegistrationItem) and item.pending_key
-        ]
-        if pending_keys:
-            from orchestrator.api.apps import _pending_registrations, _pending_lock
-            with _pending_lock:
-                for pk in pending_keys:
-                    _pending_registrations.discard(pk)
-
         duration_ms = (time.perf_counter() - start) * 1000
-        if ingest_count or heartbeat_count or registration_count:
+        if ingest_count or heartbeat_count:
             logger.debug(
-                "Writer flushed %d ingest (%d records) + %d heartbeats + %d registrations in %.0fms",
-                ingest_count, record_count, heartbeat_count, registration_count, duration_ms,
+                "Writer flushed %d ingest (%d records) + %d heartbeats in %.0fms",
+                ingest_count, record_count, heartbeat_count, duration_ms,
             )
 
     except Exception as exc:
-        # Clean up pending keys even on failure so retries aren't blocked
-        pending_keys = [
-            item.pending_key for item in items
-            if isinstance(item, RegistrationItem) and item.pending_key
-        ]
-        if pending_keys:
-            from orchestrator.api.apps import _pending_registrations, _pending_lock
-            with _pending_lock:
-                for pk in pending_keys:
-                    _pending_registrations.discard(pk)
-
         if not _is_retry:
             # Retry once after 1 second for transient failures (e.g. DB lock timeout)
             logger.warning("Writer flush failed (%d items), retrying once in 1s: %s", len(items), exc)

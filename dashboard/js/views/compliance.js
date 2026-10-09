@@ -172,11 +172,11 @@ function _renderPqc(pqc) {
     return;
   }
 
-  const rawScore = pqc.compliance_score ?? pqc.score ?? 0;
+  const rawScore = pqc.compliance_score ?? 0;
   const scoreNorm = rawScore > 1 ? rawScore / 100 : rawScore; // normalize: API may return 0-100 or 0-1
   const scorePct = Math.min(Math.round(scoreNorm * 100), 100);
-  const algorithms = pqc.algorithms_count || pqc.pqc_algorithms || 0;
-  const endpoints = pqc.protected_endpoints || 0;
+  const algorithms = (pqc.pqc_algorithms || []).length;
+  const endpoints = pqc.pqc_signed || 0;
   const scoreColor = scoreNorm >= 0.8 ? 'var(--accent)' : scoreNorm >= 0.5 ? 'var(--warn)' : 'var(--danger)';
 
   let statusBadge;
@@ -204,7 +204,7 @@ function _renderPqc(pqc) {
           <div class="kpi-value">${algorithms}</div>
         </div>
         <div class="kpi-card" style="flex:1;min-width:80px">
-          <div class="kpi-label">Protected</div>
+          <div class="kpi-label">PQC-signed</div>
           <div class="kpi-value">${endpoints}</div>
         </div>
       </div>

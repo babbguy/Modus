@@ -293,7 +293,7 @@ async def list_users(
     startIndex: int = Query(1, ge=1),
     count: int = Query(100, ge=1, le=200),
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """List or filter users (SCIM ListResponse)."""
     identity.assert_permission("users:read")
@@ -339,7 +339,7 @@ async def list_users(
 async def create_user(
     request: Request,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Create a user via SCIM provisioning."""
     identity.assert_permission("users:write")
@@ -405,7 +405,7 @@ async def get_user(
     user_id: str,
     request: Request,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Get a single user by ID."""
     identity.assert_permission("users:read")
@@ -423,7 +423,7 @@ async def replace_user(
     user_id: str,
     request: Request,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Full replacement of a user resource (SCIM PUT)."""
     identity.assert_permission("users:write")
@@ -477,7 +477,7 @@ async def patch_user(
     user_id: str,
     request: Request,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Partial update of a user (SCIM PATCH with Operations)."""
     identity.assert_permission("users:write")
@@ -566,7 +566,7 @@ async def delete_user(
     user_id: str,
     request: Request,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Deactivate a user (SCIM DELETE = soft-delete / deactivation)."""
     identity.assert_permission("users:delete")
@@ -601,7 +601,7 @@ async def list_groups(
     startIndex: int = Query(1, ge=1),
     count: int = Query(100, ge=1, le=200),
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """List or filter groups (SCIM ListResponse)."""
     identity.assert_permission("roles:read")
@@ -643,7 +643,7 @@ async def list_groups(
 async def create_group(
     request: Request,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Create a group (custom RBAC role) via SCIM provisioning."""
     identity.assert_permission("roles:write")
@@ -706,7 +706,7 @@ async def get_group(
     group_id: str,
     request: Request,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Get a single group by ID."""
     identity.assert_permission("roles:read")
@@ -737,7 +737,7 @@ async def replace_group(
     group_id: str,
     request: Request,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Full replacement of a group resource (SCIM PUT)."""
     identity.assert_permission("roles:write")
@@ -798,7 +798,7 @@ async def patch_group(
     group_id: str,
     request: Request,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Partial update of a group (SCIM PATCH with Operations)."""
     identity.assert_permission("roles:write")
@@ -918,7 +918,7 @@ async def delete_group(
     group_id: str,
     request: Request,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Delete a group (RBAC role)."""
     identity.assert_permission("roles:delete")

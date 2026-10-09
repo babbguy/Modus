@@ -30,7 +30,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from orchestrator.core.auth import Identity, get_identity
+from orchestrator.core.auth import Identity, get_identity, team_scope_clause
 from orchestrator.db.models import Alert, App, Team, UsageAggregate, AgentHeartbeat
 from orchestrator.db.session import get_session
 
@@ -96,6 +96,9 @@ class ModelBreakdown(BaseModel):
     calls: int
     avg_input_tokens: Optional[int]
     avg_output_tokens: Optional[int]
+    # Share (0-100) of ALL spend in the same window/scope, not just of the
+    # models returned, so a limited "top N" still adds up honestly.
+    pct: float = 0.0
 
 
 class AlertSummary(BaseModel):
@@ -153,7 +156,7 @@ def _apply_team_scope(query, identity: Identity, team_model):
 async def dashboard_summary(
     team_id: Optional[str] = Query(None, description="Filter to specific team UUID"),
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> KpiSummary:
     """KPI cards for the dashboard header."""
 
@@ -165,24 +168,29 @@ async def dashboard_summary(
     d30_start = _window(30)
     prior_7d_start = _window(14)
 
-    # Base filter — always restrict to daily granularity to avoid
-    # double-counting when both hourly and daily aggregates exist.
-    def _agg_filter(q, since: datetime):
+    # Base filter — daily rows only. Hourly and daily rows hold the same
+    # usage (both are updated in the same ingest transaction, see
+    # core/usage_rollup.py), so mixing them would double count; daily rows
+    # are current to the last ingested batch, including today's.
+    def _agg_filter(q, since: datetime, until: Optional[datetime] = None):
         q = q.where(
             UsageAggregate.period_start >= since,
             UsageAggregate.granularity == "daily",
         )
+        if until is not None:
+            q = q.where(UsageAggregate.period_start < until)
         if team_id:
             q = q.where(UsageAggregate.team_id == team_id)
         elif not identity.is_platform_admin and identity.team_ids:
             q = q.where(UsageAggregate.team_id.in_(identity.team_ids))
         return q
 
-    async def _sum_cost(since: datetime) -> Decimal:
+    async def _sum_cost(since: datetime, until: Optional[datetime] = None) -> Decimal:
         r = await db.execute(
             _agg_filter(
                 select(func.coalesce(func.sum(UsageAggregate.total_cost), 0)),
                 since,
+                until,
             )
         )
         return r.scalar() or Decimal("0")
@@ -194,7 +202,8 @@ async def dashboard_summary(
                 since,
             )
         )
-        return r.scalar() or 0
+        # SUM(bigint) is NUMERIC on PostgreSQL (Decimal); counts are ints.
+        return int(r.scalar() or 0)
 
     async def _sum_calls(since: datetime) -> int:
         r = await db.execute(
@@ -203,7 +212,7 @@ async def dashboard_summary(
                 since,
             )
         )
-        return r.scalar() or 0
+        return int(r.scalar() or 0)
 
     # MTD = 1st of current month → now
     mtd_start = _now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
@@ -212,7 +221,8 @@ async def dashboard_summary(
     cost_7d = await _sum_cost(d7_start)
     cost_30d = await _sum_cost(d30_start)
     cost_mtd = await _sum_cost(mtd_start)
-    cost_prior_7d = await _sum_cost(prior_7d_start)
+    # The 7 days before the current 7-day window — not the 14-day total.
+    cost_prior_7d = await _sum_cost(prior_7d_start, d7_start)
     tokens_today = await _sum_tokens(today_start)
     tokens_30d = await _sum_tokens(d30_start)
     calls_today = await _sum_calls(today_start)
@@ -281,7 +291,7 @@ async def cost_over_time(
     app_id: Optional[str] = None,
     provider: Optional[str] = None,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> list[TimeSeriesPoint]:
     if team_id:
         identity.assert_team_access(team_id)
@@ -328,7 +338,7 @@ async def by_provider(
     days: int = Query(30, ge=1, le=90),
     team_id: Optional[str] = None,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> list[ProviderBreakdown]:
     if team_id:
         identity.assert_team_access(team_id)
@@ -374,7 +384,7 @@ async def by_app(
     team_id: Optional[str] = None,
     limit: int = Query(20, ge=1, le=100),
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> list[AppBreakdown]:
     if team_id:
         identity.assert_team_access(team_id)
@@ -428,7 +438,7 @@ async def by_team(
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> list[TeamBreakdown]:
     since = _window(days)
     q = (
@@ -472,29 +482,18 @@ async def top_models(
     app_id: Optional[str] = None,
     limit: int = Query(10, ge=1, le=50),
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> list[ModelBreakdown]:
     if team_id:
         identity.assert_team_access(team_id)
 
     since = _window(days)
-    q = select(
-        UsageAggregate.provider,
-        UsageAggregate.model,
-        func.sum(UsageAggregate.total_cost).label("cost"),
-        func.sum(UsageAggregate.call_count).label("calls"),
-        func.sum(UsageAggregate.input_tokens).label("input_tokens"),
-        func.sum(UsageAggregate.output_tokens).label("output_tokens"),
-    ).where(
+    filters = [
         UsageAggregate.period_start >= since,
         UsageAggregate.granularity == "daily",
         UsageAggregate.model.isnot(None),
-    )
-
-    if team_id:
-        q = q.where(UsageAggregate.team_id == team_id)
-    elif not identity.is_platform_admin and identity.team_ids:
-        q = q.where(UsageAggregate.team_id.in_(identity.team_ids))
+        team_scope_clause(UsageAggregate.team_id, identity.visible_team_ids(team_id)),
+    ]
 
     if app_id:
         # Resolve external app_id → internal app uuid
@@ -502,7 +501,22 @@ async def top_models(
             select(App.id).where(App.app_id == app_id)
         )).scalar_one_or_none()
         if app_row is not None:
-            q = q.where(UsageAggregate.app_id == app_row)
+            filters.append(UsageAggregate.app_id == app_row)
+
+    # Total spend for the same filters (before grouping/limit) -> pct denominator.
+    total_cost = (await db.execute(
+        select(func.coalesce(func.sum(UsageAggregate.total_cost), 0)).where(*filters)
+    )).scalar_one()
+    total_cost = Decimal(str(total_cost or 0))
+
+    q = select(
+        UsageAggregate.provider,
+        UsageAggregate.model,
+        func.sum(UsageAggregate.total_cost).label("cost"),
+        func.sum(UsageAggregate.call_count).label("calls"),
+        func.sum(UsageAggregate.input_tokens).label("input_tokens"),
+        func.sum(UsageAggregate.output_tokens).label("output_tokens"),
+    ).where(*filters)
 
     q = (
         q.group_by(UsageAggregate.provider, UsageAggregate.model)
@@ -519,6 +533,7 @@ async def top_models(
             calls=r.calls or 0,
             avg_input_tokens=int(r.input_tokens / r.calls) if r.calls else None,
             avg_output_tokens=int(r.output_tokens / r.calls) if r.calls else None,
+            pct=round(float((r.cost or Decimal("0")) / total_cost * 100), 1) if total_cost > 0 else 0.0,
         )
         for r in rows
     ]
@@ -530,7 +545,7 @@ async def recent_alerts(
     unacknowledged_only: bool = False,
     app_id: Optional[str] = None,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> list[AlertSummary]:
     q = select(Alert).where(Alert.fired_at >= _window(7))
 
@@ -564,7 +579,7 @@ async def recent_alerts(
 async def app_status(
     team_id: Optional[str] = None,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> list[AppStatus]:
     from orchestrator.core.config import settings as cfg
     stale_cutoff = _now() - timedelta(minutes=cfg.heartbeat_stale_minutes)
@@ -633,7 +648,7 @@ async def executive_charts(
     days: int = Query(30, ge=1, le=90),
     team_id: Optional[str] = None,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> ExecutiveCharts:
     """Actionable charts for the executive view."""
     if team_id:

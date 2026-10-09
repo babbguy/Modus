@@ -41,7 +41,7 @@ class Settings(BaseSettings):
 
     # ── Application ────────────────────────────────────────────────────────────
     app_name: str = "Modus Orchestrator"
-    version: str = "1.0.0"
+    version: str = "1.1.0"
     environment: Literal["development", "staging", "production"] = "development"
     debug: bool = False
     disable_dashboard: bool = False
@@ -135,11 +135,14 @@ class Settings(BaseSettings):
     prune_batches_hours: int = Field(48, ge=1, le=168)
     prune_real_time_spend_days: int = Field(7, ge=1, le=90)
 
-    # ── Storage compaction ────────────────────────────────────────────────────
-    # Raw records older than compaction_after_hours are rolled up into hourly
-    # aggregates and deleted. Hourly aggregates older than 7 days are rolled
-    # into daily aggregates. Keeps DB size bounded at any call volume.
+    # ── Storage retention ─────────────────────────────────────────────────────
+    # Usage is counted into the hourly AND daily aggregates when it is
+    # ingested, so retention only deletes detail the aggregates already hold:
+    # raw usage_records older than compaction_after_hours, and hourly
+    # aggregates older than hourly_aggregate_retention_days (daily rows are
+    # kept). Keeps DB size bounded at any call volume.
     compaction_after_hours: int = Field(24, ge=1, le=168)
+    hourly_aggregate_retention_days: int = Field(7, ge=2, le=90)
 
     # ── Nomus Regulatory Engine (OPTIONAL — OFF by default) ──────────────────
     nomus_url: str = ""
@@ -248,8 +251,18 @@ class Settings(BaseSettings):
     pqc_agent_identity_enabled: bool = False
 
     # ── Rate limiting ──────────────────────────────────────────────────────────
-    rate_limit_per_minute: int = Field(200, description="Default requests per minute per API key")
-    rate_limit_burst: int = Field(50, description="Burst allowance above the per-minute rate")
+    # Two endpoint classes, each a per-key sliding window (key = the
+    # X-Modus-APIKey header, else the client IP). 0 disables a class's limit.
+    #   default: every other /api/* route (dashboard, admin, team-token calls)
+    #   sdk:     machine traffic from registered apps: /api/v1/ingest,
+    #            /heartbeat, /policy/evaluate, /routing/outcomes, /topology,
+    #            /governance/rewind-event, /otel, and GET /policies with an
+    #            app key. One evaluate per LLM call plus flushes/heartbeats,
+    #            so the SDK class is sized for thousands of calls per minute.
+    rate_limit_per_minute: int = Field(200, ge=0, description="Default class: requests per minute per key")
+    rate_limit_burst: int = Field(50, ge=0, description="Default class: burst allowance above the per-minute rate")
+    rate_limit_sdk_per_minute: int = Field(6000, ge=0, description="SDK class: requests per minute per app key")
+    rate_limit_sdk_burst: int = Field(1000, ge=0, description="SDK class: burst allowance above the per-minute rate")
 
     # ── Enforcement / policy engine ────────────────────────────────────────────
     # Master switch. Set to False to disable all policy enforcement while

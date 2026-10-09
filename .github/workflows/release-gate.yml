@@ -1,0 +1,51 @@
+name: Release gate
+
+# Runs the production image the way users do (real SDK traffic, real database,
+# real browser) and fails on stale reads, miscounted usage, broken
+# enforcement, server errors, dashboard errors and resource overruns.
+# See e2e/README.md.
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+concurrency:
+  group: release-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: Release gate (${{ matrix.db }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        db: [sqlite, postgres]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install the browser sweep (pinned Playwright + Chromium)
+        working-directory: e2e
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+      - name: Build the production image
+        run: docker build -t modus:gate .
+      - name: Run the release gate
+        run: python e2e/run_gate.py --db ${{ matrix.db }} --image modus:gate --out e2e/out/${{ matrix.db }}
+      - name: Upload screenshots and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-gate-${{ matrix.db }}
+          path: e2e/out/${{ matrix.db }}
+          retention-days: 14
+          if-no-files-found: warn

@@ -10,11 +10,15 @@ passes through evaluate() before hitting the provider. The result is one of:
     deny     — blocked; agent raises PolicyViolationError
     throttle — blocked temporarily; agent sleeps retry_after_seconds and retries
 
-Evaluation order (first match wins, no fall-through):
+Evaluation order:
     1.  App enforcement_state check (budget_suspended / admin_suspended / rate_limited)
-    2.  App-scope policies  (scope="app",      priority ASC)
-    3.  Team-scope policies (scope="team",     priority ASC)
-    4.  Platform policies   (scope="platform", priority ASC)
+        -- terminal; short-circuits everything below.
+    2.  ALL applicable policies are evaluated, in this order:
+        app-scope, then team-scope, then platform-scope (priority ASC within a scope).
+    3.  Results are combined, most restrictive wins:
+        deny > throttle > allow-with-downshift (degradation ladder) > allow.
+        A ladder downshift never bypasses a deny/throttle from any other policy.
+        "warn" policies are recorded but never change the outcome.
 
 Within each scope, lower priority number = evaluated first.
 Policy conditions are AND-evaluated — all specified conditions must match.
@@ -576,7 +580,8 @@ async def evaluate(
     Evaluate all applicable policies for a request and return a decision.
 
     Called synchronously before every AI provider call.
-    Returns immediately on first deny/throttle match.
+    Evaluates all applicable policies and returns the most restrictive outcome
+    (deny > throttle > allow with suggested downshift > allow).
     Returns allow if no policy matches or all matching policies have effect=warn.
     """
     t_start = time.perf_counter()
@@ -658,14 +663,21 @@ async def evaluate(
 
     policies = sorted(policies, key=_scope_order)
 
-    # ── Step 3: Evaluate each policy ──────────────────────────────────────────
-    final_result: PolicyResult = _ALLOW
+    # ── Step 3: Evaluate EVERY applicable policy, then combine ────────────────
+    # No policy may short-circuit the others: a degradation ladder that merely
+    # downshifts the model (decision="allow") must not skip the budget caps,
+    # denylists, rate limits... that come after it. Outcomes are combined as
+    #   deny  >  throttle  >  allow-with-downshift  >  allow
+    # (most restrictive wins; ties go to the earlier policy in app > team >
+    # platform, priority order).
+    blockers: list[PolicyResult] = []
+    downshifts: list[PolicyResult] = []
     warn_fired = False
 
     for policy in policies:
         result = await _evaluate_policy(policy, req, db, now)
         if result is None:
-            continue  # conditions didn't match
+            continue  # conditions didn't match / policy did not fire
 
         if policy.effect == "warn":
             # Warn = fire an alert but don't block. Record it, keep evaluating.
@@ -679,11 +691,23 @@ async def evaluate(
                     "reason": result.reason,
                 },
             )
-            continue  # keep evaluating — warn never stops the loop
+            continue  # warn never changes the outcome
 
-        # deny or throttle — stop evaluation immediately
-        final_result = result
-        break
+        if result.decision in ("deny", "throttle"):
+            blockers.append(result)
+        elif result.suggested_model:
+            downshifts.append(result)  # allowed, but with a cheaper model
+
+    final_result: PolicyResult = _ALLOW
+    if blockers:
+        denies = [r for r in blockers if r.decision == "deny"]
+        final_result = (denies or blockers)[0]
+    elif downshifts:
+        def _consumed(r: PolicyResult) -> Decimal:
+            if r.spend_limit:
+                return (r.spend_at_decision or Decimal("0")) / r.spend_limit
+            return Decimal("0")
+        final_result = max(downshifts, key=_consumed)  # deepest tier; stable on ties
 
     # ── Step 4: Record non-allow decisions to policy_decisions ────────────────
     latency_ms = int((time.perf_counter() - t_start) * 1000)

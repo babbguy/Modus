@@ -13,6 +13,7 @@ POST /api/v1/governance/evolution/trigger      — manually trigger evolution
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Optional
 
@@ -21,7 +22,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from orchestrator.core.auth import Identity, get_identity
+from orchestrator.core.auth import Identity, get_identity, team_scope_clause
 from orchestrator.db.models import EvolutionGeneration, EvolutionProposal
 from orchestrator.db.session import get_session, get_read_session
 
@@ -36,7 +37,9 @@ class EvolutionStatusResponse(BaseModel):
     enabled: bool
     latest_generation: Optional[int] = None
     latest_best_fitness: Optional[float] = None
+    latest_population_size: Optional[int] = None
     total_generations: int
+    total_mutations: int = 0
     pending_proposals: int
 
 
@@ -72,6 +75,29 @@ class RejectRequest(BaseModel):
     reason: str = Field(..., min_length=1)
 
 
+def _count_mutations(raw) -> int:
+    """Number of mutations recorded on one generation row.
+
+    ``mutations_applied`` holds a JSON list of human-readable mutation
+    descriptions (see constitutional_engine._describe_mutations); a JSON object
+    with a ``count`` key is also accepted. Anything unparseable counts as zero.
+    """
+    if not raw:
+        return 0
+    try:
+        data = json.loads(raw) if isinstance(raw, str) else raw
+    except ValueError:
+        return 0
+    if isinstance(data, list):
+        return len(data)
+    if isinstance(data, dict):
+        try:
+            return int(data.get("count", 0))
+        except (TypeError, ValueError):
+            return 0
+    return 0
+
+
 # ── Endpoints ────────────────────────────────────────────────────────────────
 
 @evolution_router.get("/status", response_model=EvolutionStatusResponse)
@@ -83,20 +109,27 @@ async def evolution_status(
     from orchestrator.core.config import get_settings
     settings = get_settings()
 
+    teams = identity.visible_team_ids()
+    gen_scope = team_scope_clause(EvolutionGeneration.team_id, teams)
+    prop_scope = team_scope_clause(EvolutionProposal.team_id, teams)
+
     total_gens = await db.scalar(
-        select(func.count(EvolutionGeneration.id))
+        select(func.count(EvolutionGeneration.id)).where(gen_scope)
     ) or 0
 
     pending = await db.scalar(
         select(func.count(EvolutionProposal.id))
-        .where(EvolutionProposal.status == "pending")
+        .where(EvolutionProposal.status == "pending", prop_scope)
     ) or 0
 
     latest_gen = None
     latest_fitness = None
+    latest_population = None
+    total_mutations = 0
     if total_gens > 0:
         result = await db.execute(
             select(EvolutionGeneration)
+            .where(gen_scope)
             .order_by(EvolutionGeneration.created_at.desc())
             .limit(1)
         )
@@ -104,12 +137,19 @@ async def evolution_status(
         if latest:
             latest_gen = latest.generation_number
             latest_fitness = latest.best_fitness
+            latest_population = latest.population_size
+        raw = await db.execute(
+            select(EvolutionGeneration.mutations_applied).where(gen_scope)
+        )
+        total_mutations = sum(_count_mutations(m) for (m,) in raw.all())
 
     return EvolutionStatusResponse(
         enabled=settings.evolution_enabled,
         latest_generation=latest_gen,
         latest_best_fitness=latest_fitness,
+        latest_population_size=latest_population,
         total_generations=total_gens,
+        total_mutations=total_mutations,
         pending_proposals=pending,
     )
 
@@ -129,8 +169,8 @@ async def list_generations(
 
     if team_id:
         q = q.where(EvolutionGeneration.team_id == team_id)
-    elif not identity.is_platform_admin:
-        q = q.where(EvolutionGeneration.team_id == identity.team_id)
+    else:
+        q = q.where(team_scope_clause(EvolutionGeneration.team_id, identity.visible_team_ids()))
 
     q = q.offset(offset).limit(limit)
     result = await db.execute(q)
@@ -145,7 +185,7 @@ async def list_generations(
             avg_fitness=r.avg_fitness,
             best_genome_yaml=r.best_genome_yaml,
             elapsed_ms=r.elapsed_ms,
-            created_at=str(r.created_at) if r.created_at else None,
+            created_at=r.created_at.isoformat() if r.created_at else None,
         )
         for r in rows
     ]
@@ -166,8 +206,8 @@ async def list_proposals(
 
     if team_id:
         q = q.where(EvolutionProposal.team_id == team_id)
-    elif not identity.is_platform_admin:
-        q = q.where(EvolutionProposal.team_id == identity.team_id)
+    else:
+        q = q.where(team_scope_clause(EvolutionProposal.team_id, identity.visible_team_ids()))
     if status:
         q = q.where(EvolutionProposal.status == status)
 
@@ -184,7 +224,7 @@ async def list_proposals(
             rationale=r.rationale,
             status=r.status,
             proposal_yaml=r.proposal_yaml,
-            created_at=str(r.created_at) if r.created_at else None,
+            created_at=r.created_at.isoformat() if r.created_at else None,
         )
         for r in rows
     ]
@@ -194,7 +234,7 @@ async def list_proposals(
 async def accept_proposal(
     proposal_id: str,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Accept an evolved policy proposal — creates GovernancePolicy."""
     proposal = await db.get(EvolutionProposal, proposal_id)
@@ -219,7 +259,7 @@ async def reject_proposal(
     proposal_id: str,
     body: RejectRequest,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Reject an evolved policy proposal with reason."""
     proposal = await db.get(EvolutionProposal, proposal_id)
@@ -241,7 +281,7 @@ async def reject_proposal(
 @evolution_router.post("/trigger")
 async def trigger_evolution(
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ):
     """Manually trigger an evolution run (admin only)."""
     if not identity.is_platform_admin:

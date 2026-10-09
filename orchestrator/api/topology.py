@@ -29,6 +29,7 @@ DELETE /api/v1/teams/{team_id}/registration-token
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -55,6 +56,9 @@ router = APIRouter()
 
 _TEAM_TOKEN_PREFIX = "mds_team_"
 _TEAM_TOKEN_BCRYPT_ROUNDS = 8
+# Cost for the stable key of a self-registered app, whose plaintext is never
+# returned or stored (see self_register).
+_DISCARDED_KEY_BCRYPT_ROUNDS = 4
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -90,7 +94,9 @@ async def _resolve_team_token(raw_token: str, db: AsyncSession) -> Optional[Team
         return None
 
     try:
-        if bcrypt.checkpw(raw_token.encode(), team.registration_token_hash.encode()):
+        if await asyncio.to_thread(
+            bcrypt.checkpw, raw_token.encode(), team.registration_token_hash.encode()
+        ):
             return team
     except ValueError as exc:
         # Malformed stored hash — fail closed but leave an audit trail.
@@ -163,7 +169,7 @@ class SelfRegisterResponse(BaseModel):
 async def self_register(
     body: SelfRegisterRequest,
     request: Request,
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> SelfRegisterResponse:
     # Extract team token from header
     raw_token = (
@@ -202,13 +208,6 @@ async def self_register(
     safe_app_id = _make_safe_app_id(body.app_id)
     now = datetime.now(timezone.utc)
 
-    # Generate a stable key only for the INSERT path (new apps).
-    # We include it in the upsert but DO NOT update it on conflict —
-    # the existing key stays intact.
-    new_stable_key = _generate_app_key()
-    new_key_hash = _hash_key(new_stable_key)
-    new_app_uuid = str(__import__("uuid").uuid4())
-
     # Check if app already exists (needed for SQLite path, avoids .returning())
     existing_app = (await db.execute(
         select(App).where(App.team_id == str(team.id), App.app_id == safe_app_id, App.deleted_at.is_(None))
@@ -223,6 +222,18 @@ async def self_register(
         app_uuid = str(existing_app.id)
         newly_created = False
     else:
+        # A new app gets a stable mds_ key only so the row has one; the agent
+        # authenticates with the session token below and the plaintext key is
+        # discarded right here (an admin issues a usable key with rotate-key).
+        # Nobody can ever present this key, and it is 32 random characters,
+        # so the bcrypt cost factor protects nothing: hash it at the minimum
+        # cost. At the default cost (12, about 0.3-0.6 s of CPU) every
+        # registration, reconnects included, burned that much CPU, and a few
+        # apps starting at once on a 1-CPU server pushed registration past
+        # the SDK's 3 s timeout, which disables governance for that process.
+        new_stable_key = _generate_app_key()
+        new_key_hash = await asyncio.to_thread(_hash_key, new_stable_key, _DISCARDED_KEY_BCRYPT_ROUNDS)
+        new_app_uuid = str(__import__("uuid").uuid4())
         app_obj = App(
             id=new_app_uuid,
             team_id=str(team.id),
@@ -301,7 +312,7 @@ class TopologyReportResponse(BaseModel):
 async def report_topology(
     body: TopologyReportRequest,
     raw_key: str = Depends(get_app_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> TopologyReportResponse:
     app = await _verify_app_key(raw_key, db)
     snap = body.snapshot
@@ -418,7 +429,7 @@ class TopologyView(BaseModel):
 async def list_topology(
     team_id: Optional[str] = None,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> list[TopologyView]:
     q = select(AppTopology, App.app_id.label("app_slug"), App.app_name).\
         join(App, AppTopology.app_id == App.id)
@@ -462,7 +473,7 @@ async def list_topology(
 async def get_topology(
     app_id: str,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> TopologyView:
     # Scope by team in the query. App slugs are unique only within a team, so
     # filtering by slug alone can match rows from multiple teams and make
@@ -529,7 +540,7 @@ class TeamTokenResponse(BaseModel):
 async def generate_team_token(
     team_id: str,
     request: Request,
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> TeamTokenResponse:
     raw_key = _extract_raw_key(request)
     if not _verify_master_key(raw_key):
@@ -540,7 +551,7 @@ async def generate_team_token(
         raise HTTPException(404, "Team not found.")
 
     token = _generate_team_token()
-    team.registration_token_hash = _hash_team_token(token)
+    team.registration_token_hash = await asyncio.to_thread(_hash_team_token, token)
     team.registration_token_prefix = token[:20]
 
     db.add(AuditLog(
@@ -573,7 +584,7 @@ async def generate_team_token(
 async def revoke_team_token(
     team_id: str,
     request: Request,
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> None:
     raw_key = _extract_raw_key(request)
     if not _verify_master_key(raw_key):

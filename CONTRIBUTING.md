@@ -42,6 +42,11 @@ Please run both before opening a pull request, and add or update tests for any
 behaviour you change. Tests use an in-memory SQLite database and need no
 external services.
 
+Pull requests into `develop` and `main` must also pass the release gate
+(`Release gate (sqlite)` and `Release gate (postgres)`), which runs the real
+Docker image with real SDK traffic and a browser; run it locally with
+`python e2e/run_gate.py --db sqlite` (see [e2e/README.md](e2e/README.md)).
+
 ## Project conventions
 
 - **The SDK stays standard-library only.** Do not add third-party imports to
@@ -64,11 +69,27 @@ external services.
 - Add the SPDX header (`Copyright 2026 babbguy` and
   `SPDX-License-Identifier: Apache-2.0`) to new source files.
 
+## Branches and releases
+
+The project follows git flow:
+
+| Branch | Purpose |
+|--------|---------|
+| `main` | Released code only. Every commit on `main` is a tagged release (`vX.Y.Z`). |
+| `develop` | Integration branch and the repository's default branch. |
+| `feat/<topic>`, `fix/<topic>` | Work branches, created from `develop` and merged back into it by pull request. |
+| `release/X.Y.Z` | Created from `develop` to prepare a release (version bump, changelog), merged into `main` by pull request, tagged, then merged back into `develop`. |
+| `hotfix/X.Y.Z` | Created from `main` for an urgent fix to a release, merged into `main` (tagged) and into `develop`. |
+
+`main` and `develop` are protected: changes land only through pull requests whose
+CI checks pass, and direct or force pushes are refused.
+
 ## Pull request process
 
 1. Open an issue first for anything larger than a small fix, so we can agree on
    the approach.
-2. Branch from `main` (`feat/<topic>` or `fix/<topic>`).
+2. Branch from `develop` (`feat/<topic>` or `fix/<topic>`) and open the pull
+   request against `develop`.
 3. Keep commits focused, with clear messages in the imperative mood
    (for example `fix: reject negative token counts at ingest`).
 4. Make sure `pytest` and `ruff check .` pass.

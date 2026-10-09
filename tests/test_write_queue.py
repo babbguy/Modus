@@ -247,9 +247,9 @@ class TestPolicyDecisionItem:
 
 
 async def test_aggregate_upsert_folds_min_max_and_ignores_null(engine, registered_app):
-    """Repeated aggregate upserts keep the true min/max and never let a NULL
-    stored value erase a real one (SQLite min(NULL, x) is NULL)."""
-    import uuid
+    """Repeated usage increments keep the true min/max and never let a NULL
+    stored value erase a real one (SQLite min(NULL, x) is NULL). The hourly
+    and the daily row receive the same increments."""
     from datetime import datetime, timezone
     from decimal import Decimal
 
@@ -265,34 +265,42 @@ async def test_aggregate_upsert_folds_min_max_and_ignores_null(engine, registere
     session_mod._session_factory = factory
     start = datetime(2026, 10, 1, 12, tzinfo=timezone.utc)
 
-    def row(min_ms, max_ms, calls, dur_sum):
-        return {
-            "id": str(uuid.uuid4()), "app_id": registered_app["app_uuid"],
-            "team_id": registered_app["team_id"], "provider": "anthropic",
-            "model": "claude-sonnet-5-5", "resource_type": "llm_call",
-            "granularity": "hourly", "period_start": start,
-            "period_end": start.replace(hour=13), "call_count": calls,
+    def item(batch_id, min_ms, max_ms, calls, dur_sum):
+        inc = {
+            "app_id": registered_app["app_uuid"], "team_id": registered_app["team_id"],
+            "provider": "anthropic", "model": "claude-sonnet-5-5",
+            "resource_type": "llm_call", "hour_start": start, "call_count": calls,
             "input_tokens": 10, "output_tokens": 5, "total_tokens": 15,
             "input_cost": Decimal("0.001"), "output_cost": Decimal("0.001"),
-            "total_cost": Decimal("0.002"), "avg_duration_ms": None,
+            "total_cost": Decimal("0.002"),
             "min_duration_ms": min_ms, "max_duration_ms": max_ms,
-            "duration_ms_sum": dur_sum, "source": "sdk",
+            "duration_ms_sum": dur_sum,
         }
+        return wq.IngestItem(
+            app_id=registered_app["app_uuid"], team_id=registered_app["team_id"],
+            batch_id=batch_id, records=[], record_count=0, usage=[inc],
+            count_records=False, source="sdk",
+        )
 
     try:
-        await wq._flush_batch([wq.AggregationItem(rows=[row(None, None, 1, 0)], granularity="hourly")])
-        await wq._flush_batch([wq.AggregationItem(rows=[row(300, 300, 1, 300)], granularity="hourly")])
-        await wq._flush_batch([wq.AggregationItem(rows=[row(100, 500, 2, 600)], granularity="hourly")])
+        await wq._flush_batch([item("agg-batch-0001", None, None, 1, 0)])
+        await wq._flush_batch([item("agg-batch-0002", 300, 300, 1, 300)])
+        await wq._flush_batch([item("agg-batch-0003", 100, 500, 2, 600)])
         async with factory() as db:
-            agg = (await db.execute(select(UsageAggregate))).scalar_one()
+            rows = {
+                r.granularity: r
+                for r in (await db.execute(select(UsageAggregate))).scalars().all()
+            }
     finally:
         session_mod._session_factory = prev
 
-    assert agg.call_count == 4
-    assert agg.min_duration_ms == 100
-    assert agg.max_duration_ms == 500
-    assert agg.duration_ms_sum == 900
-    assert agg.total_cost == Decimal("0.006")
+    assert set(rows) == {"hourly", "daily"}
+    for agg in rows.values():
+        assert agg.call_count == 4
+        assert agg.min_duration_ms == 100
+        assert agg.max_duration_ms == 500
+        assert agg.duration_ms_sum == 900
+        assert agg.total_cost == Decimal("0.006")
 
 
 async def test_duplicate_ingest_batch_is_skipped_without_losing_other_items(engine, registered_app):

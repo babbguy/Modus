@@ -7,12 +7,12 @@ from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from orchestrator.core.auth import Identity, get_identity
-from orchestrator.db.models import AuditLog, Threshold
+from orchestrator.db.models import App, AuditLog, Threshold
 from orchestrator.db.session import get_session
 
 router = APIRouter()
@@ -33,6 +33,30 @@ class ThresholdCreate(BaseModel):
     notify: Optional[dict] = None
     degradation_model: Optional[str] = None
     degradation_enabled: bool = False
+
+    @model_validator(mode="after")
+    def _check_consistency(self) -> "ThresholdCreate":
+        # Each scope needs its anchor, otherwise the evaluator would silently
+        # widen the rule (e.g. an "app" rule with no app watches the whole team).
+        if self.scope == "app" and not self.app_id:
+            raise ValueError("scope 'app' requires app_id.")
+        if self.scope == "provider" and not (self.provider or "").strip():
+            raise ValueError("scope 'provider' requires provider.")
+        if self.scope == "user" and not self.user_id:
+            raise ValueError("scope 'user' requires user_id.")
+        if self.scope == "cost_center" and not self.cost_center_id:
+            raise ValueError("scope 'cost_center' requires cost_center_id.")
+        _check_values(self.warning_value, self.critical_value)
+        return self
+
+
+def _check_values(warning: Optional[Decimal], critical: Optional[Decimal]) -> None:
+    if critical is not None and critical <= 0:
+        raise ValueError("critical_value must be greater than 0.")
+    if warning is not None and warning < 0:
+        raise ValueError("warning_value must not be negative.")
+    if warning is not None and critical is not None and warning >= critical:
+        raise ValueError("warning_value must be lower than critical_value.")
 
 
 class ThresholdUpdate(BaseModel):
@@ -89,7 +113,7 @@ async def list_thresholds(
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> list[ThresholdResponse]:
     identity.assert_permission("thresholds:read")
     q = select(Threshold).where(Threshold.is_active == True)
@@ -115,10 +139,15 @@ async def create_threshold(
     body: ThresholdCreate,
     request: Request,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> ThresholdResponse:
     identity.assert_permission("thresholds:write")
     identity.assert_team_access(body.team_id)
+
+    if body.app_id:
+        app = await db.get(App, body.app_id)
+        if app is None or str(app.team_id) != str(body.team_id):
+            raise HTTPException(422, "app_id does not belong to team_id.")
 
     t = Threshold(**body.model_dump())
     db.add(t)
@@ -135,7 +164,7 @@ async def delete_threshold(
     threshold_id: str,
     request: Request,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> None:
     identity.assert_permission("thresholds:delete")
     t = await db.get(Threshold, threshold_id)
@@ -155,7 +184,7 @@ async def update_threshold(
     body: ThresholdUpdate,
     request: Request,
     identity: Identity = Depends(get_identity),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession = Depends(get_session, scope="function"),
 ) -> ThresholdResponse:
     identity.assert_permission("thresholds:write")
     t = await db.get(Threshold, threshold_id)
@@ -164,6 +193,13 @@ async def update_threshold(
     identity.assert_team_access(str(t.team_id))
 
     updates = body.model_dump(exclude_unset=True)
+    try:
+        _check_values(
+            updates.get("warning_value", t.warning_value),
+            updates.get("critical_value", t.critical_value),
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
     for field, value in updates.items():
         setattr(t, field, value)
     await db.flush()
