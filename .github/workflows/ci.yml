@@ -7,6 +7,27 @@ on:
     branches: [main, develop]
 
 jobs:
+  release-packaging:
+    name: Release packaging
+    # The checks the tag workflows (release.yml, publish.yml) depend on, run on
+    # every change so a broken release is caught before a tag is pushed.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: CHANGELOG has notes for the packaged version
+        run: |
+          VERSION=$(python -c "import tomllib; print(tomllib.load(open('sdk/pyproject.toml','rb'))['project']['version'])")
+          python scripts/release_notes.py "$VERSION" --images > /dev/null
+      - name: Production compose file is valid
+        run: |
+          cp deploy/.env.example deploy/.env
+          docker compose -f deploy/docker-compose.prod.yml config --quiet
+      - name: Deploy scripts parse
+        run: bash -n deploy/install.sh && bash -n deploy/upgrade.sh && bash -n deploy/uninstall.sh
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
