@@ -42,6 +42,9 @@ from orchestrator.db.models import (
 )
 
 NOW = datetime.now(timezone.utc).replace(microsecond=0)
+# A moment earlier today (UTC). "NOW - 30 min" falls on the previous day in the
+# first half hour after midnight, which the "today" endpoints rightly exclude.
+EARLIER_TODAY = max(NOW - timedelta(minutes=30), NOW.replace(hour=0, minute=0, second=0))
 TZ_SUFFIX = re.compile(r"(Z|[+-]\d{2}:\d{2})$")
 
 
@@ -81,7 +84,7 @@ async def world(db_session):
         for decision, cost in (("deny", "2.50"), ("deny", "1.50"), ("throttle", "0")):
             db_session.add(PolicyDecision(
                 app_id=a.id, team_id=t.id, decision=decision, reason="test",
-                request_estimated_cost=Decimal(cost), decided_at=NOW - timedelta(minutes=30),
+                request_estimated_cost=Decimal(cost), decided_at=EARLIER_TODAY,
             ))
         hour = NOW.replace(minute=0, second=0)
         db_session.add(UsageAggregate(
