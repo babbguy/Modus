@@ -12,7 +12,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Response
 from fastapi.responses import HTMLResponse
-from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from prometheus_client import CONTENT_TYPE_PLAIN_0_0_4, generate_latest
 
 from orchestrator.core.config import settings
 
@@ -297,7 +297,10 @@ def register_routers(app: FastAPI) -> None:
     if settings.metrics_enabled:
         @app.get(settings.metrics_path, include_in_schema=False)
         async def metrics() -> Response:
+            # generate_latest() writes the classic text format (version 0.0.4).
+            # CONTENT_TYPE_LATEST now names version 1.0.0, which prometheus_client
+            # only serves when a scraper negotiates it, so name the format sent.
             return Response(
                 content=generate_latest(),
-                media_type=CONTENT_TYPE_LATEST,
+                media_type=CONTENT_TYPE_PLAIN_0_0_4,
             )
