@@ -17,8 +17,8 @@ alembic==1.20.0
 psycopg2-binary==2.9.13             # for alembic CLI (sync)
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-pydantic==2.10.0
-pydantic-settings==2.6.0
+pydantic==2.13.5
+pydantic-settings==2.15.0
 
 # ── Security ───────────────────────────────────────────────────────────────────
 bcrypt==4.2.0                       # password/key hashing
