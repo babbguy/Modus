@@ -8,6 +8,7 @@ version = "1.1.0"
 description = "AI cost governance and policy enforcement for Python applications"
 readme = "README.md"
 license = "FSL-1.1-ALv2"
+license-files = ["LICENSE"]
 authors = [{name = "babbguy"}]
 requires-python = ">=3.9"
 keywords = ["ai", "cost", "governance", "llm", "anthropic", "openai", "bedrock", "policy"]

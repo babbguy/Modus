@@ -23,7 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   license, open a discussion titled "Commercial license" in the repository's
   Discussions (https://github.com/babbguy/Modus/discussions). The SPDX
   identifier in the SDK package metadata, source file headers, the container
-  image label and the dashboard Settings view is now `FSL-1.1-ALv2`.
+  image label and the dashboard Settings view is now `FSL-1.1-ALv2`, and the
+  SDK wheel and sdist now include the license text (`sdk/LICENSE`).
 
 ## [1.1.0] - 2026-10-09
 
