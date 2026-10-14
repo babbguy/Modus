@@ -2,7 +2,7 @@
 Modus — Arithmetic Circuit (Phase 8b, EXPERIMENTAL)
 =======================================================
 Copyright 2026 babbguy
-SPDX-License-Identifier: Apache-2.0
+SPDX-License-Identifier: FSL-1.1-ALv2
 
 Pure-Python arithmetic circuit abstraction. Implements R1CS (Rank-1
 Constraint System) over a prime field, enabling encoding of governance

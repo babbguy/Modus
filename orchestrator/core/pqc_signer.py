@@ -2,7 +2,7 @@
 Modus — Attestation Signer (HMAC default, optional PQC add-on)
 ==================================================================
 Copyright 2026 babbguy
-SPDX-License-Identifier: Apache-2.0
+SPDX-License-Identifier: FSL-1.1-ALv2
 
 Signs enforcement attestations. Two tiers with very different guarantees:
 

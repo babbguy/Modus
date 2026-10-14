@@ -1,5 +1,5 @@
 # Copyright 2026 babbguy
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: FSL-1.1-ALv2
 """Runs the Playwright sweep (e2e/sweep/sweep.mjs) and turns its output into checks."""
 from __future__ import annotations
 

@@ -1,5 +1,5 @@
 # Copyright 2026 babbguy
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: FSL-1.1-ALv2
 """Write-then-read: create a resource, then use it on the very next request.
 
 A response that is sent before its transaction commits makes the next request

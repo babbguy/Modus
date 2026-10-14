@@ -2,7 +2,7 @@
 Modus — Policy Genome Representation (Phase 8d)
 =====================================================
 Copyright 2026 babbguy
-SPDX-License-Identifier: Apache-2.0
+SPDX-License-Identifier: FSL-1.1-ALv2
 
 Policy genome representation for evolutionary optimization of governance
 policies. Encodes policy parameters as typed genes that support crossover,

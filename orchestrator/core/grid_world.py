@@ -2,7 +2,7 @@
 Modus — Grid World Agent Simulator (Phase 8d)
 ====================================================
 Copyright 2026 babbguy
-SPDX-License-Identifier: Apache-2.0
+SPDX-License-Identifier: FSL-1.1-ALv2
 
 Lightweight agent simulation environment for fitness evaluation of
 policy genomes. Each simulated agent replays a trajectory drawn from

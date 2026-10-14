@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **License.** Starting with v1.2.0, Modus is licensed under the Functional
+  Source License, Version 1.1, ALv2 Future License (FSL-1.1-ALv2) instead of
+  the Apache License 2.0. You may use, copy, modify and redistribute it for any
+  purpose other than a Competing Use, which the license defines as making the
+  software available to others in a commercial product or service that
+  substitutes for it, substitutes for any other product or service we offer
+  using it that exists as of the date we make it available, or offers the same
+  or substantially similar functionality (see `LICENSE` for the exact terms).
+  Each version also becomes available under the Apache License 2.0 on the
+  second anniversary of the date it is made available. Versions up to and
+  including v1.1.0 remain under the Apache License 2.0. For a commercial
+  license, open a discussion titled "Commercial license" in the repository's
+  Discussions (https://github.com/babbguy/Modus/discussions). The SPDX
+  identifier in the SDK package metadata, source file headers, the container
+  image label and the dashboard Settings view is now `FSL-1.1-ALv2`.
+
 ## [1.1.0] - 2026-10-09
 
 ### Added

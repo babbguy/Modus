@@ -1,5 +1,5 @@
 # Copyright 2026 babbguy
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: FSL-1.1-ALv2
 """Local alert-webhook receiver for the release gate (standard library only).
 
 Runs in its own container on the gate's Docker network. Modus delivers alert

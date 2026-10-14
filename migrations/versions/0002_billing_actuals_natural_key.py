@@ -1,5 +1,5 @@
 # Copyright 2026 babbguy
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: FSL-1.1-ALv2
 """Unique natural key on billing_actuals.
 
 Revision ID: 0002

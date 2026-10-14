@@ -2,7 +2,7 @@
 Modus — Merkle Tree Implementation
 =========================================
 Copyright 2026 babbguy
-SPDX-License-Identifier: Apache-2.0
+SPDX-License-Identifier: FSL-1.1-ALv2
 
 Pure-Python Merkle tree for cryptographic attestation of enforcement decisions.
 Used by the attestation engine to anchor batches of signed decisions into a

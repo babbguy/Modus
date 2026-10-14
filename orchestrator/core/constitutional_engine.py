@@ -2,7 +2,7 @@
 Modus — Constitutional Evolution Engine (Phase 8d)
 =======================================================
 Copyright 2026 babbguy
-SPDX-License-Identifier: Apache-2.0
+SPDX-License-Identifier: FSL-1.1-ALv2
 
 Main evolution engine that combines policy genomes, grid world simulation,
 and optional Z3 formal verification into a genetic algorithm that discovers

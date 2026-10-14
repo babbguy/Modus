@@ -2,7 +2,7 @@
 Modus Federator — Static JSON Publisher
 =============================================
 Copyright 2026 babbguy
-SPDX-License-Identifier: Apache-2.0
+SPDX-License-Identifier: FSL-1.1-ALv2
 
 Pre-computes ALL read responses as static JSON files on disk.
 Caddy serves these directly — zero Python overhead for reads.

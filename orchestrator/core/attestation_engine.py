@@ -2,7 +2,7 @@
 Modus — Cryptographic Attestation Engine
 ===============================================
 Copyright 2026 babbguy
-SPDX-License-Identifier: Apache-2.0
+SPDX-License-Identifier: FSL-1.1-ALv2
 
 Generates tamper-evident, HMAC-SHA256-signed attestations for every enforcement
 decision. Batch operations anchor attestations into a Merkle tree so an entire

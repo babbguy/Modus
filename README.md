@@ -1,7 +1,7 @@
 # Modus
 
 [![CI](https://github.com/babbguy/Modus/actions/workflows/ci.yml/badge.svg)](https://github.com/babbguy/Modus/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
+[![License](https://img.shields.io/badge/license-FSL--1.1--ALv2-blue)](LICENSE)
 
 Modus is a self-hosted AI cost-governance platform. A small Python SDK
 instruments your LLM client libraries, a FastAPI orchestrator evaluates budgets
@@ -244,5 +244,27 @@ regulatory rules from a Nomus instance.
 
 ## License
 
-Licensed under the [Apache License, Version 2.0](LICENSE). See [NOTICE](NOTICE)
-for third-party attributions.
+Starting with v1.2.0, Modus is licensed under the
+[Functional Source License, Version 1.1, ALv2 Future License](LICENSE)
+(FSL-1.1-ALv2). Versions up to and including v1.1.0 remain under the
+Apache License, Version 2.0.
+
+You may use, copy, modify and redistribute Modus for any purpose other than a
+Competing Use. The license defines a Competing Use as making the software
+available to others in a commercial product or service that:
+
+1. substitutes for the software;
+2. substitutes for any other product or service we offer using the software
+   that exists as of the date we make the software available; or
+3. offers the same or substantially similar functionality as the software.
+
+Internal use, non-commercial education, non-commercial research, and
+professional services you provide to a licensee are expressly permitted. Each
+version also becomes available under the Apache License, Version 2.0, on the
+second anniversary of the date it is made available. The [LICENSE](LICENSE)
+file is the full and binding text.
+
+For a commercial license, open a discussion titled "Commercial license" in
+this repository's [Discussions](https://github.com/babbguy/Modus/discussions).
+
+See [NOTICE](NOTICE) for third-party attributions.

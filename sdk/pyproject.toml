@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,14 +7,13 @@ name = "modus-agent"
 version = "1.1.0"
 description = "AI cost governance and policy enforcement for Python applications"
 readme = "README.md"
-license = {text = "Apache-2.0"}
+license = "FSL-1.1-ALv2"
 authors = [{name = "babbguy"}]
 requires-python = ">=3.9"
 keywords = ["ai", "cost", "governance", "llm", "anthropic", "openai", "bedrock", "policy"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",

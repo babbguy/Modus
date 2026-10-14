@@ -2,7 +2,7 @@
 Modus — Agent Identity Engine (HMAC shim)
 =============================================
 Copyright 2026 babbguy
-SPDX-License-Identifier: Apache-2.0
+SPDX-License-Identifier: FSL-1.1-ALv2
 
 Generates and manages symmetric-key identities for AI agents using HKDF
 key derivation and HMAC-SHA-256. Note: this is a symmetric-MAC shim, NOT a

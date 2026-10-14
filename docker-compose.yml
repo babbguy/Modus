@@ -1,6 +1,6 @@
 # Modus — Production deploy (PostgreSQL + multi-service)
 # Copyright 2026 babbguy
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: FSL-1.1-ALv2
 # Usage: cp .env.example .env && docker compose up --build -d
 # Dashboard: http://localhost:8080
 
