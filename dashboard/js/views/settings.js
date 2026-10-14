@@ -136,7 +136,7 @@ function _renderSettings(ver) {
           </div>
           <div class="settings-row">
             <span class="settings-label">License</span>
-            <span class="settings-value">Apache-2.0</span>
+            <span class="settings-value">FSL-1.1-ALv2</span>
           </div>
         </div>
       </section>

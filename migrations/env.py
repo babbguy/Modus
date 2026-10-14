@@ -1,7 +1,7 @@
 """
 Alembic migration environment (async SQLAlchemy).
 Copyright 2026 babbguy
-SPDX-License-Identifier: Apache-2.0
+SPDX-License-Identifier: FSL-1.1-ALv2
 
 Used for PostgreSQL deployments only; SQLite builds its schema with
 create_all at startup. MODUS_DATABASE_URL selects the database.

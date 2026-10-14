@@ -2,7 +2,7 @@
 Regression tests — usage-data pipeline
 =======================================
 Copyright 2026 babbguy
-SPDX-License-Identifier: Apache-2.0
+SPDX-License-Identifier: FSL-1.1-ALv2
 
 Covers the bugs fixed on fix/usage-pipeline:
   1. the aggregator re-added the last 2 days of raw usage every cycle

@@ -2,7 +2,7 @@
 Modus — PQC Attestation Migration Tool
 =============================================
 Copyright 2026 babbguy
-SPDX-License-Identifier: Apache-2.0
+SPDX-License-Identifier: FSL-1.1-ALv2
 
 Backfills existing enforcement attestations with a ``pqc_signature`` value.
 Queries attestations that lack one, computes the value from the stored

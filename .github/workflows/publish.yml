@@ -134,6 +134,7 @@ jobs:
             org.opencontainers.image.description=AI cost governance — ${{ matrix.component }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.licenses=FSL-1.1-ALv2
 
   # ── Verify Deployment Files ──────────────────────────────────────────────
   verify-deploy:

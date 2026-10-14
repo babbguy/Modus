@@ -1,7 +1,7 @@
 # Modus — tooling configuration only (pytest, coverage). Not an installable package;
 # the SDK package is defined in sdk/pyproject.toml.
 # Copyright 2026 babbguy
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: FSL-1.1-ALv2
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

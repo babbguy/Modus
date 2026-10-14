@@ -2,7 +2,7 @@
 Modus Federator — Minimal Write Handler
 =============================================
 Copyright 2026 babbguy
-SPDX-License-Identifier: Apache-2.0
+SPDX-License-Identifier: FSL-1.1-ALv2
 
 Ultra-lightweight ASGI handler for POST /v1/deltas ONLY.
 Everything else is served as static JSON by Caddy.

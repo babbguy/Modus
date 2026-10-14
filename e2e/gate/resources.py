@@ -1,5 +1,5 @@
 # Copyright 2026 babbguy
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: FSL-1.1-ALv2
 """Resource budget: memory, idle CPU, and evaluate latency at concurrency 10."""
 from __future__ import annotations
 

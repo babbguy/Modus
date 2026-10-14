@@ -2,7 +2,7 @@
 Modus — Neuromorphic Enforcement Engine (Phase 8e, Research Demo)
 ======================================================
 Copyright 2026 babbguy
-SPDX-License-Identifier: Apache-2.0
+SPDX-License-Identifier: FSL-1.1-ALv2
 
 Evaluates governance policies via a software-simulated Spiking Neural
 Network. This is a research demo: the SNN runs entirely in Python on a

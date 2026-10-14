@@ -12,7 +12,7 @@
 #   ./upgrade.sh --dry-run        # Show what would happen
 #
 # Copyright 2026 babbguy
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: FSL-1.1-ALv2
 # =============================================================================
 
 set -euo pipefail

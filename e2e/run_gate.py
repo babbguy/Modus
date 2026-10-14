@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright 2026 babbguy
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: FSL-1.1-ALv2
 """Modus release gate: one command, real product, PASS or FAIL.
 
     python e2e/run_gate.py --db sqlite

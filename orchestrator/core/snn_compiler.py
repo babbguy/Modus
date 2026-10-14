@@ -2,7 +2,7 @@
 Modus — Spiking Neural Network Policy Compiler (Phase 8e)
 =============================================================
 Copyright 2026 babbguy
-SPDX-License-Identifier: Apache-2.0
+SPDX-License-Identifier: FSL-1.1-ALv2
 
 Compiles YAML policy constraints into Spiking Neural Network (SNN)
 topologies for neuromorphic enforcement.  Each policy type maps to a

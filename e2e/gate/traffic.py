@@ -1,5 +1,5 @@
 # Copyright 2026 babbguy
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: FSL-1.1-ALv2
 """Real-SDK traffic and exact reconciliation.
 
 Several apps register at the same moment with a team registration token, send

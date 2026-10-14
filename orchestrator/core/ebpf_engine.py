@@ -2,7 +2,7 @@
 Modus — eBPF Advisory Budget Tracking Engine (Preview, Phase 11a)
 =============================================================
 Copyright 2026 babbguy
-SPDX-License-Identifier: Apache-2.0
+SPDX-License-Identifier: FSL-1.1-ALv2
 
 Advisory, in-process budget tracking (Preview). Kernel-level eBPF
 enforcement is experimental, Linux-only, and NOT active by default.

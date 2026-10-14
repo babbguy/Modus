@@ -4,7 +4,9 @@ Thanks for your interest in Modus. This is a small, maintainer-run project;
 issues and pull requests are welcome, though responses are best-effort.
 
 By contributing you agree that your contributions are licensed under the
-[Apache License 2.0](LICENSE).
+project's license, the
+[Functional Source License, Version 1.1, ALv2 Future License](LICENSE)
+(FSL-1.1-ALv2).
 
 ## Development setup
 
@@ -67,7 +69,7 @@ Docker image with real SDK traffic and a browser; run it locally with
 - **Keep optional integrations optional.** Nothing should make outbound calls
   unless the operator has enabled it.
 - Add the SPDX header (`Copyright 2026 babbguy` and
-  `SPDX-License-Identifier: Apache-2.0`) to new source files.
+  `SPDX-License-Identifier: FSL-1.1-ALv2`) to new source files.
 
 ## Branches and releases
 

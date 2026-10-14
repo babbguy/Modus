@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright 2026 babbguy
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: FSL-1.1-ALv2
 """Fail if the migrated PostgreSQL schema differs from the ORM models.
 
 Run after ``alembic upgrade heads`` against an otherwise empty database:

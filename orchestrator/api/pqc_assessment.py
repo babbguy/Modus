@@ -2,7 +2,7 @@
 Modus — PQC Assessment API
 ================================
 Copyright 2026 babbguy
-SPDX-License-Identifier: Apache-2.0
+SPDX-License-Identifier: FSL-1.1-ALv2
 
 REST API for PQC readiness assessment and HNDL risk simulation.
 Implements features B1 (PQC-Hybrid Crypto-Agility Dashboard) and

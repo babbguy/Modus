@@ -1,5 +1,5 @@
 # Copyright 2026 babbguy
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: FSL-1.1-ALv2
 """Enforcement and chaos scenarios, each driven through the real product.
 
 Every scenario uses its own app in a dedicated chaos team, so the traffic

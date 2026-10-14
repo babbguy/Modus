@@ -1,5 +1,5 @@
 // Copyright 2026 babbguy
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: FSL-1.1-ALv2
 //
 // Browser sweep for the release gate: signs in to the real dashboard with the
 // master key, opens every hash view, and records console errors, failed API
