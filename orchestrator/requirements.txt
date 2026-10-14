@@ -21,9 +21,9 @@ pydantic==2.13.5
 pydantic-settings==2.15.0
 
 # ── Security ───────────────────────────────────────────────────────────────────
-bcrypt==4.2.0                       # password/key hashing
+bcrypt==5.0.0                       # password/key hashing
 PyJWT[crypto]==2.15.1               # JWT auth (session and API tokens)
-cryptography==44.0.0                # credential encryption, RSA/Ed25519 handling
+cryptography==50.0.2                # credential encryption, RSA/Ed25519 handling
 # pqcrypto>=0.4.0                   # OPTIONAL: real NIST FIPS-204 ML-DSA-65 post-quantum
                                      # signatures (audit attestations).
                                      # Absent → the code uses the HMAC-SHA-512 integrity shim
