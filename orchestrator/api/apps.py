@@ -26,7 +26,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from orchestrator.core.auth import Identity, get_identity, team_scope_clause
-from orchestrator.core.config import settings
+from orchestrator.core.config import APP_KEY_RANDOM_CHARS, settings
 from orchestrator.db.models import App, AuditLog, Team
 from orchestrator.db.session import get_session
 from orchestrator.metrics.prometheus import KEY_ROTATIONS_TOTAL, REGISTRATIONS_TOTAL
@@ -46,7 +46,7 @@ _ALPHABET = string.ascii_letters + string.digits
 
 def _generate_app_key() -> str:
     """Generate a mds_ API key. URL-safe, 44 chars total."""
-    token = "".join(secrets.choice(_ALPHABET) for _ in range(32))
+    token = "".join(secrets.choice(_ALPHABET) for _ in range(APP_KEY_RANDOM_CHARS))
     return f"{settings.api_key_prefix}{token}"
 
 

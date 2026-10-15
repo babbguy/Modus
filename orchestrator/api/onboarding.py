@@ -137,7 +137,7 @@ def _parse_yaml_simple(raw: str) -> dict:
     line-by-line parser that covers the documented policy schema.
     """
     try:
-        import yaml  # type: ignore[import-untyped]
+        import yaml
         return yaml.safe_load(raw) or {}
     except ImportError:
         pass
