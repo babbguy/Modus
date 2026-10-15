@@ -8,6 +8,37 @@ project's license, the
 [Functional Source License, Version 1.1, ALv2 Future License](LICENSE)
 (FSL-1.1-ALv2).
 
+## Contributor License Agreement
+
+Before your first pull request can be merged, you need to sign the Contributor
+License Agreement once. [CLA.md](CLA.md) is the reference copy of its text.
+
+When you open a pull request, the CLA assistant bot
+([cla-assistant.io](https://cla-assistant.io)) comments with a link to the
+agreement. Follow the link, sign in with GitHub, and accept the agreement. The
+same agreement covers Modus and Nomus, so one signature works for both. If the
+text of the agreement changes, the bot asks you to sign the new version.
+
+The `license/cla` check on a pull request stays pending until everyone who made
+commits in it has signed. The bot can only match a commit to you if the commit's
+email address is one of the addresses on your GitHub account.
+
+### If your employer owns your contribution
+
+Section 3(c) of [CLA.md](CLA.md) says: "If You are an employee, You have had
+Your employer approve this Agreement or sign the Entity version of this
+document." The entity version is [CLA-entity.md](CLA-entity.md). The bot cannot
+collect an entity signature, so if your employer is going to sign it, open an
+issue before you open your pull request and the maintainer will arrange it.
+
+### Work you do not own
+
+If a pull request includes material whose copyright you do not own (for example,
+code copied from another project), say so in the pull request description: name
+its source, its copyright holder and its license, and list the files that
+contain it. A maintainer decides whether it can be accepted before the pull
+request is merged.
+
 ## Development setup
 
 Requirements: Python 3.10+ (3.12 recommended; CI uses 3.12), and Docker if you
