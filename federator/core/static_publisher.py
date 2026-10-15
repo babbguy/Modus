@@ -110,12 +110,14 @@ def _publish_portal(conn, current_week: str, sd: Path):
         "SELECT root_hash FROM merkle_anchors ORDER BY created_at DESC LIMIT 1"
     ).fetchone()
 
-    from federator.config import settings
+    # Not federator.config: the slim image this runs in has no pydantic.
+    from federator import __version__
+    from federator.write_handler import ALLOWED_INDUSTRIES
 
     _write_json(sd /"portal.json", {
         "service": "modus-federator",
-        "version": settings.version,
-        "available_industries": settings.allowed_industries,
+        "version": __version__,
+        "available_industries": sorted(ALLOWED_INDUSTRIES),
         "industry_stats": industry_stats,
         "total_deltas": total_deltas,
         "total_contributors": total_contributors,

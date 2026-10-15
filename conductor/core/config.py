@@ -16,7 +16,7 @@ Example: CONDUCTOR_DATABASE_URL sets database_url.
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Literal
+from typing import Literal, Union
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -61,7 +61,11 @@ class Settings(BaseSettings):
     jwt_audience: str = "modus"
 
     # ── CORS ───────────────────────────────────────────────────────────────────
-    cors_origins: list[str] = [
+    # Comma-separated origins. Typed as a union with ``str`` (as in the
+    # orchestrator) so that pydantic-settings falls back to the raw string when
+    # the env value is not JSON; parse_cors_origins then splits it, and the
+    # result is always a list.
+    cors_origins: Union[list[str], str] = [
         "http://localhost:3001",
         "http://localhost:8080",
         "http://localhost:8090",

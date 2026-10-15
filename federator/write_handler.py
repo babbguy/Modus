@@ -35,6 +35,9 @@ logger = logging.getLogger(__name__)
 DB_PATH = os.environ.get("FEDERATOR_DB_PATH", "/data/federator.db")
 JWT_SECRET = os.environ.get("FEDERATOR_JWT_SECRET", "")
 JWT_ALGORITHM = os.environ.get("FEDERATOR_JWT_ALGORITHM", "HS256")
+# Same claims, and defaults, as the full service (federator/config.py)
+JWT_ISSUER = os.environ.get("FEDERATOR_JWT_ISSUER", "modus-orchestrator")
+JWT_AUDIENCE = os.environ.get("FEDERATOR_JWT_AUDIENCE", "modus-federator")
 MAX_PAYLOAD_BYTES = int(os.environ.get("FEDERATOR_MAX_PAYLOAD_BYTES", "65536"))
 RATE_LIMIT_PER_HOUR = int(os.environ.get("FEDERATOR_RATE_LIMIT_SUBMITS_PER_HOUR", "10"))
 
@@ -112,6 +115,8 @@ def _verify_jwt(token: str) -> dict | None:
         payload = jwt.decode(
             token, JWT_SECRET,
             algorithms=[JWT_ALGORITHM],
+            issuer=JWT_ISSUER,
+            audience=JWT_AUDIENCE,
             options={"require": ["sub", "exp"]},
         )
         return payload

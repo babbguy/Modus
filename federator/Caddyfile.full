@@ -1,0 +1,27 @@
+# Modus Federator — Caddy for the full FastAPI stack (docker-compose.yml)
+# =========================================================================
+# TLS termination in front of the federator service, which serves every route.
+# The static-first Caddyfile is for docker-compose.slim.yml and the systemd
+# units only.
+#
+# Set FEDERATOR_DOMAIN in .env to your actual domain. Caddy automatically
+# provisions Let's Encrypt TLS certificates for it.
+
+{$FEDERATOR_DOMAIN:federator.example.com} {
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "no-referrer"
+        -Server
+    }
+
+    reverse_proxy federator:8443
+
+    log {
+        output file /var/log/caddy/access.log {
+            roll_size 10mb
+            roll_keep 3
+        }
+    }
+}

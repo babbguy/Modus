@@ -12,8 +12,10 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir --no-compile -r requirements.txt
 
-# Copy application
-COPY . .
+# Copy application. The build context is federator/ (see docker-compose.yml)
+# and the code is the `federator` package, so it goes under /app/federator.
+# .dockerignore keeps .env and the deploy files out of the image.
+COPY . ./federator/
 
 # Create data directory for SQLite
 RUN mkdir -p /data && chown federator:federator /data

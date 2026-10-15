@@ -10,10 +10,12 @@ Example: FEDERATOR_DATABASE_URL sets database_url.
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Literal
+from typing import Literal, Union
 
 from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from federator import __version__
 
 
 class FederatorSettings(BaseSettings):
@@ -27,7 +29,7 @@ class FederatorSettings(BaseSettings):
 
     # ── Application ────────────────────────────────────────────────────────────
     app_name: str = "Modus Federator"
-    version: str = "1.0.0"
+    version: str = __version__
     environment: Literal["development", "staging", "production"] = "production"
     debug: bool = False
 
@@ -65,9 +67,12 @@ class FederatorSettings(BaseSettings):
     ]
 
     # ── CORS ────────────────────────────────────────────────────────────────────
-    cors_origins: list[str] = []
     # Allowed CORS origins. Empty list = no CORS allowed.
-    # Set via FEDERATOR_CORS_ORIGINS as comma-separated origins.
+    # Set via FEDERATOR_CORS_ORIGINS as comma-separated origins. Typed as a
+    # union with ``str`` (as in the orchestrator) so that pydantic-settings
+    # falls back to the raw string when the env value is not JSON;
+    # parse_cors_origins then splits it, and the result is always a list.
+    cors_origins: Union[list[str], str] = []
 
     # ── TLS ────────────────────────────────────────────────────────────────────
     tls_cert_path: str = ""
