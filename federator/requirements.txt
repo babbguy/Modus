@@ -1,17 +1,19 @@
 # Modus Federator — Dependencies
 # Minimal footprint. No unnecessary packages.
+# Exact pins, like the orchestrator and conductor, so every image build
+# installs the same, audited versions.
 
 # Web framework
-fastapi>=0.110.0,<1.0
-uvicorn[standard]>=0.27.0,<1.0
+fastapi==0.136.3
+uvicorn[standard]==0.54.0
 
 # Database (async SQLite default, PostgreSQL optional)
-sqlalchemy[asyncio]>=2.0.25,<3.0
-aiosqlite>=0.19.0,<1.0
+sqlalchemy[asyncio]==2.0.54
+aiosqlite==0.22.1
 
 # Auth
-PyJWT>=2.8.0,<3.0
+PyJWT==2.15.1
 
 # Settings
-pydantic>=2.5.0,<3.0
-pydantic-settings>=2.1.0,<3.0
+pydantic==2.13.5
+pydantic-settings==2.15.0

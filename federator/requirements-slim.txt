@@ -1,8 +1,9 @@
 # Modus Federator — Slim Dependencies
 # Only what the write handler needs. No FastAPI, no Pydantic.
+# Exact pins, matching requirements.txt.
 
 # ASGI server (the ONLY runtime dependency for the write handler)
-uvicorn>=0.27.0,<1.0
+uvicorn==0.54.0
 
 # JWT verification
-PyJWT>=2.8.0,<3.0
+PyJWT==2.15.1
