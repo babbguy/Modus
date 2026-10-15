@@ -6,19 +6,19 @@
 # exporter, no password hashing, no form parsing.
 
 # ── Web framework ──────────────────────────────────────────────────────────────
-fastapi==0.115.0
-uvicorn[standard]==0.32.0
-uvloop==0.21.0; sys_platform != "win32"
+fastapi==0.136.3
+uvicorn[standard]==0.54.0
+uvloop==0.23.0; sys_platform != "win32"
 
 # ── Database ───────────────────────────────────────────────────────────────────
-sqlalchemy[asyncio]==2.0.36
-asyncpg==0.30.0
-aiosqlite==0.20.0
+sqlalchemy[asyncio]==2.0.54
+asyncpg==0.31.0
+aiosqlite==0.22.1
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-pydantic==2.10.0
-pydantic-settings==2.6.0
+pydantic==2.13.5
+pydantic-settings==2.15.0
 
 # ── Security ───────────────────────────────────────────────────────────────────
-PyJWT[crypto]==2.9.0                # HS256 and RS256 bearer tokens
-cryptography==44.0.0                # RS256 verification (PyJWT[crypto])
+PyJWT[crypto]==2.15.1               # HS256 and RS256 bearer tokens
+cryptography==50.0.2                # RS256 verification (PyJWT[crypto])
