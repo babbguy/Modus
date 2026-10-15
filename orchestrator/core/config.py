@@ -29,6 +29,7 @@ from urllib.parse import urlparse
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from orchestrator.core.build_info import build_version
 from orchestrator.core.secret_hash import BCRYPT_MAX_BYTES
 
 # An app key is api_key_prefix plus this many random characters.
@@ -46,7 +47,8 @@ class Settings(BaseSettings):
 
     # ── Application ────────────────────────────────────────────────────────────
     app_name: str = "Modus Orchestrator"
-    version: str = "1.1.0"
+    # `version` is a read-only property below, not a setting: MODUS_VERSION
+    # in deploy/.env is the image tag.
     environment: Literal["development", "staging", "production"] = "development"
     debug: bool = False
     disable_dashboard: bool = False
@@ -448,6 +450,11 @@ class Settings(BaseSettings):
     # ── Plugins ────────────────────────────────────────────────────────────────
     plugins_enabled: bool = True
     # Set to False to skip loading plugins/ on startup.
+
+    @property
+    def version(self) -> str:
+        """The version this build reports (see orchestrator/core/build_info.py)."""
+        return build_version()
 
     @property
     def is_sqlite(self) -> bool:

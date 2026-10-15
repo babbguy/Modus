@@ -152,6 +152,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `*` or an empty value stopped the service at startup with a
   `SettingsError`: only a JSON list worked. They are now parsed as the
   orchestrator parses `MODUS_CORS_ORIGINS`, and a JSON list still works.
+- **Federator bare-metal install (`deploy.sh --systemd`).** It never
+  completed: it created the virtualenv as the `federator` user in a
+  root-owned `/opt/federator` (permission denied), then copied a
+  `federator/` directory that does not exist where the script runs. The
+  writer unit could not have run either: it passed uvicorn `--fd 0`, which is
+  stdin, not the socket systemd hands over (fd 3), and it was `Type=notify`
+  with a watchdog, which uvicorn never signals, so systemd killed it after
+  the start timeout. The script now installs the package without secrets or
+  deployment files, a root-owned virtualenv, `.env` readable only by the
+  service and the units, then starts the writer and publishes the first
+  static files; re-running it updates an install and keeps the data. The
+  writer unit is `Type=exec` with `--fd 3` and `Restart=on-failure`, and
+  requires `/opt/federator/.env`. The slim writer now refuses to start
+  without `FEDERATOR_JWT_SECRET`, as the full service does, instead of
+  starting and answering every submission with 401.
+- **Federator `deploy.sh --status`.** It requested `http://localhost:443`,
+  plain HTTP on Caddy's TLS port, which always fails, and reported nothing
+  when no check passed. It now checks the service on the address it listens
+  on and `https://<FEDERATOR_DOMAIN>/health` through Caddy, reports each
+  result, and exits non-zero if a check fails. `--status --systemd` checks a
+  bare-metal install. `--setup` waits for the same checks.
+- **Conductor readiness.** `GET /ready` answered 200 with
+  `"status": "not_ready"` when the database was down, so a load balancer or
+  readiness probe kept sending traffic to it, and 500 before the database was
+  initialised. It now answers 503, as the orchestrator does, and logs the
+  cause. The Compose and image health checks probe `/healthz` and are
+  unchanged, so a database outage does not restart the container.
+- **Reported version.** Under `deploy/`, the orchestrator's `/health`,
+  `/ready` and `/version` reported `"version": "latest"`: `MODUS_VERSION` in
+  `.env` is the image tag, and the Compose file passes `.env` to the
+  container, where it also set the orchestrator's `version` setting. The
+  Conductor reported `1.0.0` whatever it was. The version is no longer a
+  setting: the Dockerfiles take a `MODUS_BUILD_VERSION` build argument,
+  check that it is a version, write it into the image and set the
+  `org.opencontainers.image.version` label, and the services report it. An
+  image built without it (such as `docker compose up --build`) reports the
+  version of its source. `publish.yml` passes the release version and fails
+  a release whose version differs from the source's, and CI checks that the
+  orchestrator, Conductor and SDK versions agree (`scripts/check_versions.py`).
+  `MODUS_VERSION` still selects the image tag.
+- **Remaining customer action templates.** `deploy-orchestrator.yml` and
+  `register-app.yml` still used tag-pinned actions on old runtimes, two of
+  which no longer run on current GitHub runners: azure/setup-helm v3 (Node
+  16) and gliech/create-github-secret-action v1 (Node 12). Now
+  aws-actions/configure-aws-credentials 6.3.0 (was v4, Node 20),
+  aws-actions/amazon-ecr-login 2.1.7 (still the latest major),
+  docker/metadata-action 6.2.0 (was v5, Node 20) and azure/setup-helm 5.0.1,
+  each pinned to a full commit SHA with its version in a comment; every
+  step's inputs exist in the pinned version. gliech/create-github-secret-action
+  has had no release since 2022 and has no Node 20 or 24 version, so
+  `register-app.yml` now stores `MODUS_API_KEY` and `MODUS_APP_ID` with
+  `gh secret set`, preinstalled on GitHub-hosted runners, using the same
+  `GH_PAT_SECRETS_WRITE` token and the same repository, with the values on
+  stdin. The production smoke test in `deploy-orchestrator.yml` expected
+  `/ready` to answer `"status": "ready"`, but the orchestrator answers `"ok"`,
+  so every production deploy failed its smoke test; it now checks for `"ok"`.
 
 ## [1.1.0] - 2026-10-09
 

@@ -21,6 +21,8 @@ from typing import Literal, Union
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from conductor.core.build_info import build_version
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -33,7 +35,8 @@ class Settings(BaseSettings):
 
     # ── Application ────────────────────────────────────────────────────────────
     app_name: str = "Modus Conductor"
-    version: str = "1.0.0"
+    # `version` is a read-only property below: the version of this build,
+    # not a setting.
     environment: Literal["development", "staging", "production"] = "production"
     debug: bool = False
 
@@ -144,6 +147,11 @@ class Settings(BaseSettings):
     region_id: str = ""
 
     # ── Computed properties ────────────────────────────────────────────────────
+
+    @property
+    def version(self) -> str:
+        """The version this build reports (see conductor/core/build_info.py)."""
+        return build_version()
 
     @property
     def is_sqlite(self) -> bool:

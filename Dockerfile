@@ -25,6 +25,18 @@ COPY dashboard/ dashboard/
 RUN mkdir -p plugins
 COPY plugins/ plugins/
 
+# The version the service reports, baked in at build time: publish.yml
+# passes the release version (docker build --build-arg MODUS_BUILD_VERSION=1.2.0).
+# Without it, the image reports the version in the source. The image tag
+# (MODUS_VERSION in deploy/.env) does not change it.
+ARG MODUS_BUILD_VERSION=""
+LABEL org.opencontainers.image.version="${MODUS_BUILD_VERSION}"
+RUN if [ -n "$MODUS_BUILD_VERSION" ]; then \
+        echo "$MODUS_BUILD_VERSION" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?' \
+            || { echo "MODUS_BUILD_VERSION must be a version such as 1.2.0, not '$MODUS_BUILD_VERSION'" >&2; exit 1; }; \
+        printf '%s\n' "$MODUS_BUILD_VERSION" > orchestrator/BUILD_VERSION; \
+    fi
+
 # Migration-aware entrypoint (runs alembic for Postgres, skips for SQLite)
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh

@@ -110,6 +110,9 @@ def _compute_merkle_leaf(nonce: str, commitment: str, fitness: float,
 
 def _verify_jwt(token: str) -> dict | None:
     """Verify JWT and return claims. Returns None on failure."""
+    if not JWT_SECRET:
+        # An empty HMAC key would accept tokens signed with an empty key.
+        return None
     try:
         import jwt
         payload = jwt.decode(
@@ -224,6 +227,13 @@ async def app(scope, receive, send):
     if scope["type"] == "lifespan":
         msg = await receive()
         if msg["type"] == "lifespan.startup":
+            if not JWT_SECRET:
+                # Same rule as the full service: no secret, no start.
+                await send({
+                    "type": "lifespan.startup.failed",
+                    "message": "FEDERATOR_JWT_SECRET must be set",
+                })
+                return
             conn = _get_db()
             _ensure_tables(conn)
             conn.close()

@@ -95,3 +95,7 @@ deploy/compose/
 # Release gate (e2e/) artifacts and the pinned Playwright install
 e2e/out/
 e2e/node_modules/
+
+# Written only inside images, from the MODUS_BUILD_VERSION build argument
+orchestrator/BUILD_VERSION
+conductor/BUILD_VERSION
