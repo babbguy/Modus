@@ -21,6 +21,10 @@ jobs:
         run: |
           VERSION=$(python -c "import tomllib; print(tomllib.load(open('sdk/pyproject.toml','rb'))['project']['version'])")
           python scripts/release_notes.py "$VERSION" --images > /dev/null
+      - name: Orchestrator and Conductor report the packaged version
+        run: |
+          VERSION=$(python -c "import tomllib; print(tomllib.load(open('sdk/pyproject.toml','rb'))['project']['version'])")
+          python scripts/check_versions.py "$VERSION"
       - name: Production compose file is valid
         run: |
           cp deploy/.env.example deploy/.env

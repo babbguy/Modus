@@ -7,9 +7,11 @@
 #   MODUS_MASTER_KEY  — master key from platform team (mds_master_...)
 #   MODUS_URL         — orchestrator base URL (e.g. https://modus.internal)
 #
-# After success, adds MODUS_API_KEY and MODUS_APP_ID as repo secrets.
-# Requires a PAT with repo scope stored as GH_PAT_SECRETS_WRITE (secrets:write is
-# not a built-in GITHUB_TOKEN permission).
+# After success, adds MODUS_API_KEY and MODUS_APP_ID as repo secrets with the
+# GitHub CLI (`gh secret set`). Requires a token stored as GH_PAT_SECRETS_WRITE
+# that can write this repository's Actions secrets: a fine-grained PAT with
+# "Secrets: Read and write" on the repository, or a classic PAT with `repo`
+# scope (writing secrets is not a GITHUB_TOKEN permission).
 #
 # The request matches POST /api/v1/apps/register:
 #   {app_id, app_name, team_slug, environment}  ->  {app_id, api_key, api_key_prefix, ...}
@@ -92,19 +94,22 @@ jobs:
           rm -f response.json
           echo "API_KEY=${API_KEY}" >> "$GITHUB_OUTPUT"
 
-      - name: Store API key as repo secret
-        uses: gliech/create-github-secret-action@v1
-        with:
-          pa_token: ${{ secrets.GH_PAT_SECRETS_WRITE }}
-          name: MODUS_API_KEY
-          value: ${{ steps.register.outputs.API_KEY }}
-
-      - name: Store App ID as repo secret
-        uses: gliech/create-github-secret-action@v1
-        with:
-          pa_token: ${{ secrets.GH_PAT_SECRETS_WRITE }}
-          name: MODUS_APP_ID
-          value: ${{ inputs.app_id }}
+      - name: Store API key and App ID as repo secrets
+        # The GitHub CLI (preinstalled on GitHub-hosted runners) encrypts each
+        # value with the repository's public key and creates or updates the
+        # secret. Values go in on stdin, never on the command line.
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT_SECRETS_WRITE }}
+          API_KEY: ${{ steps.register.outputs.API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "::error::GH_PAT_SECRETS_WRITE is not set"
+            exit 1
+          fi
+          REPO="${GITHUB_SERVER_URL#https://}/${GITHUB_REPOSITORY}"
+          printf '%s' "${API_KEY}" | gh secret set MODUS_API_KEY --app actions --repo "${REPO}"
+          printf '%s' "${APP_ID}" | gh secret set MODUS_APP_ID --app actions --repo "${REPO}"
 
       - name: Registration summary
         run: |

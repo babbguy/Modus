@@ -1,0 +1,14 @@
+# Build context for Dockerfile and Dockerfile.slim. Only the Python package
+# belongs in the image: never secrets, never deployment files.
+.env
+.env.*
+*.db
+*.db-*
+__pycache__/
+*.pyc
+Dockerfile*
+docker-compose*.yml
+Caddyfile*
+deploy.sh
+systemd/
+.dockerignore

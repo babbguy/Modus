@@ -16,10 +16,12 @@ Example: CONDUCTOR_DATABASE_URL sets database_url.
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Literal
+from typing import Literal, Union
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from conductor.core.build_info import build_version
 
 
 class Settings(BaseSettings):
@@ -33,7 +35,8 @@ class Settings(BaseSettings):
 
     # ── Application ────────────────────────────────────────────────────────────
     app_name: str = "Modus Conductor"
-    version: str = "1.0.0"
+    # `version` is a read-only property below: the version of this build,
+    # not a setting.
     environment: Literal["development", "staging", "production"] = "production"
     debug: bool = False
 
@@ -61,7 +64,11 @@ class Settings(BaseSettings):
     jwt_audience: str = "modus"
 
     # ── CORS ───────────────────────────────────────────────────────────────────
-    cors_origins: list[str] = [
+    # Comma-separated origins. Typed as a union with ``str`` (as in the
+    # orchestrator) so that pydantic-settings falls back to the raw string when
+    # the env value is not JSON; parse_cors_origins then splits it, and the
+    # result is always a list.
+    cors_origins: Union[list[str], str] = [
         "http://localhost:3001",
         "http://localhost:8080",
         "http://localhost:8090",
@@ -140,6 +147,11 @@ class Settings(BaseSettings):
     region_id: str = ""
 
     # ── Computed properties ────────────────────────────────────────────────────
+
+    @property
+    def version(self) -> str:
+        """The version this build reports (see conductor/core/build_info.py)."""
+        return build_version()
 
     @property
     def is_sqlite(self) -> bool:

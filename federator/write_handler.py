@@ -35,6 +35,9 @@ logger = logging.getLogger(__name__)
 DB_PATH = os.environ.get("FEDERATOR_DB_PATH", "/data/federator.db")
 JWT_SECRET = os.environ.get("FEDERATOR_JWT_SECRET", "")
 JWT_ALGORITHM = os.environ.get("FEDERATOR_JWT_ALGORITHM", "HS256")
+# Same claims, and defaults, as the full service (federator/config.py)
+JWT_ISSUER = os.environ.get("FEDERATOR_JWT_ISSUER", "modus-orchestrator")
+JWT_AUDIENCE = os.environ.get("FEDERATOR_JWT_AUDIENCE", "modus-federator")
 MAX_PAYLOAD_BYTES = int(os.environ.get("FEDERATOR_MAX_PAYLOAD_BYTES", "65536"))
 RATE_LIMIT_PER_HOUR = int(os.environ.get("FEDERATOR_RATE_LIMIT_SUBMITS_PER_HOUR", "10"))
 
@@ -107,11 +110,16 @@ def _compute_merkle_leaf(nonce: str, commitment: str, fitness: float,
 
 def _verify_jwt(token: str) -> dict | None:
     """Verify JWT and return claims. Returns None on failure."""
+    if not JWT_SECRET:
+        # An empty HMAC key would accept tokens signed with an empty key.
+        return None
     try:
         import jwt
         payload = jwt.decode(
             token, JWT_SECRET,
             algorithms=[JWT_ALGORITHM],
+            issuer=JWT_ISSUER,
+            audience=JWT_AUDIENCE,
             options={"require": ["sub", "exp"]},
         )
         return payload
@@ -219,6 +227,13 @@ async def app(scope, receive, send):
     if scope["type"] == "lifespan":
         msg = await receive()
         if msg["type"] == "lifespan.startup":
+            if not JWT_SECRET:
+                # Same rule as the full service: no secret, no start.
+                await send({
+                    "type": "lifespan.startup.failed",
+                    "message": "FEDERATOR_JWT_SECRET must be set",
+                })
+                return
             conn = _get_db()
             _ensure_tables(conn)
             conn.close()

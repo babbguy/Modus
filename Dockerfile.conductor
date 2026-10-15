@@ -4,7 +4,7 @@
 # validates completeness, reconciles, serves org-wide dashboard.
 #
 # Usage: docker build -f Dockerfile.conductor -t modus-conductor .
-# Run:   docker run -p 8090:8090 modus-conductor
+# Run:   docker run -p 8090:8090 -v conductor_data:/app/data modus-conductor
 
 # ── Stage 1: builder ──────────────────────────────────────────────────────────
 FROM python:3.12-slim AS builder
@@ -36,18 +36,33 @@ COPY --from=builder /install /usr/local
 COPY conductor/ ./conductor/
 COPY dashboard/ ./dashboard/
 
+# The version the service reports, baked in at build time: publish.yml
+# passes the release version (docker build --build-arg MODUS_BUILD_VERSION=1.2.0).
+# Without it, the image reports the version in the source. The image tag
+# (MODUS_VERSION in deploy/.env) does not change it.
+ARG MODUS_BUILD_VERSION=""
+LABEL org.opencontainers.image.version="${MODUS_BUILD_VERSION}"
+RUN if [ -n "$MODUS_BUILD_VERSION" ]; then \
+        echo "$MODUS_BUILD_VERSION" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?' \
+            || { echo "MODUS_BUILD_VERSION must be a version such as 1.2.0, not '$MODUS_BUILD_VERSION'" >&2; exit 1; }; \
+        printf '%s\n' "$MODUS_BUILD_VERSION" > conductor/BUILD_VERSION; \
+    fi
+
 RUN mkdir -p /app/data && chown -R modus:modus /app
 
 USER modus
 
+# The database defaults to the /app/data volume rather than the container's
+# writable layer. Override with CONDUCTOR_DATABASE_URL.
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONPATH=/app
+    PYTHONPATH=/app \
+    CONDUCTOR_DATABASE_URL=sqlite+aiosqlite:///data/conductor.db
 
 EXPOSE 8090
 
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
-    CMD curl -f http://localhost:8090/health || exit 1
+    CMD curl -f http://localhost:8090/healthz || exit 1
 
 CMD ["uvicorn", "conductor.main:app", \
      "--host", "0.0.0.0", \

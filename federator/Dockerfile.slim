@@ -23,8 +23,9 @@ WORKDIR /opt/federator
 COPY --from=builder /deps /opt/federator/deps
 ENV PYTHONPATH=/opt/federator:/opt/federator/deps
 
-# Application code
-COPY federator/ ./federator/
+# Application code. The build context is federator/ (see
+# docker-compose.slim.yml) and the code is the `federator` package.
+COPY . ./federator/
 
 # Create data directories
 RUN mkdir -p /data/static/results /data/static/audit && \

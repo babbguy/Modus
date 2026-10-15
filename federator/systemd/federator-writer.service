@@ -1,38 +1,46 @@
 # Modus Federator — Write Handler Service
 # =============================================
-# Activated by federator-writer.socket on demand.
-# Auto-stops after 120s idle (TimeoutStopSec + idle detection).
+# Socket-activated: systemd holds 127.0.0.1:8444 (federator-writer.socket) and
+# starts this service on the first connection, passing the listening socket as
+# file descriptor 3. Once started, it keeps running.
 #
-# RAM: ~40-60MB when active, 0 when idle.
+# Type=exec: uvicorn never sends sd_notify, so systemd must not wait for a
+# READY=1 that never comes (Type=notify) or a watchdog ping (WatchdogSec).
 #
-# Install: sudo cp federator-writer.service /etc/systemd/system/
+# RAM: ~40-60MB once started, 0 before the first connection.
+#
+# Install: ./deploy.sh --systemd (or sudo cp federator-writer.service /etc/systemd/system/)
 # Logs:    journalctl -u federator-writer -f
 
 [Unit]
 Description=Modus Federator Write Handler
 Requires=federator-writer.socket
-After=network.target
+After=network.target federator-writer.socket
+# Stop restarting after 5 failures within 2 minutes (the unit then stays failed)
+StartLimitIntervalSec=120
+StartLimitBurst=5
 
 [Service]
-Type=notify
+Type=exec
 User=federator
 Group=federator
 WorkingDirectory=/opt/federator
 Environment=FEDERATOR_DB_PATH=/data/federator.db
-Environment=FEDERATOR_JWT_SECRET=
-EnvironmentFile=-/opt/federator/.env
+# FEDERATOR_JWT_SECRET (required) comes from this file; the writer refuses to
+# start without it.
+EnvironmentFile=/opt/federator/.env
 
 ExecStart=/opt/federator/venv/bin/uvicorn \
     federator.write_handler:app \
-    --fd 0 \
+    --fd 3 \
     --workers 1 \
     --timeout-keep-alive 30 \
     --access-log \
     --log-level warning
 
-# Auto-stop after 120s idle — saves RAM
-TimeoutStopSec=5
-WatchdogSec=300
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=10
 
 # Resource limits — lightweight
 MemoryMax=128M

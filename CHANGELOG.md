@@ -54,6 +54,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `InsecureKeyLengthWarning` to the server's error output.
   - `alembic.ini` uses `path_separator` instead of the deprecated
     `version_path_separator`.
+- **GitHub Action and workflow templates upgraded and pinned.** The composite
+  actions (`github-action/action.yml`, `github-action/cost-check/action.yml`)
+  and the templates in `deploy/github-actions/workflows/` now use the same
+  versions as this repository's workflows: setup-python 7 (was 5),
+  github-script 9 (was 7), checkout 7 (was 4), docker setup-buildx 4 (was 3)
+  and build-push 7 (was 5), each pinned to a full commit SHA with its version
+  in a comment. They run on Node 24, so **self-hosted runners need GitHub
+  Actions runner 2.327.1 or later** (GitHub-hosted runners already qualify).
+  The shipped `github-script` steps need no changes for v9; a step of your own
+  that calls `require('@actions/github')` or declares `getOctokit` with
+  `const`/`let` does (see `deploy/github-actions/README.md`).
 
 ### Fixed
 
@@ -94,6 +105,109 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whatever is newest at build time. In the Conductor's JWT mode, a token
   whose `sub` claim is not a string is now refused (401), as on the
   orchestrator.
+
+- **Conductor in `deploy/docker-compose.prod.yml` (org-wide mode).** The
+  Conductor reads `CONDUCTOR_*` variables, but the Compose file passed it
+  `MODUS_DATABASE_URL` and `MODUS_PORT`, which it ignored. In production it
+  then saw no push secret and stub auth and refused to start, so
+  `install.sh --org-wide` left it restarting; with those set, its database
+  went to `/app/conductor.db` in the container's writable layer instead of
+  the `conductor_data` volume, and was lost when the container was
+  recreated. The Compose file now maps the shared `.env` onto the
+  Conductor's own variables: `MODUS_CONDUCTOR_DATABASE_URL` (default: SQLite
+  on the volume), `MODUS_ENVIRONMENT`, `MODUS_AUTH_MODE`, `MODUS_JWT_SECRET`
+  and `MODUS_CONDUCTOR_SECRET`, the secret Orchestrators push with.
+  `install.sh --org-wide` generates `MODUS_CONDUCTOR_SECRET` when it is not
+  set. Any other `CONDUCTOR_*` setting can go in `deploy/.env` as-is. The
+  image's database also defaults to the `/app/data` volume.
+  `CONDUCTOR_DATABASE_URL` works as before.
+- **Conductor health check.** The image and the Compose file probed
+  `/health`, which the Conductor does not serve, so the container was always
+  `unhealthy`. They now probe its liveness route, `/healthz`.
+- **Federator images.** Both failed with their own Compose files. The full
+  image copied the files to `/app` without the `federator` package directory,
+  so `uvicorn federator.main:app` failed with `ModuleNotFoundError`; the slim
+  image's `COPY federator/` did not exist in its build context. Both now copy
+  the package to `federator/`, and a `.dockerignore` keeps `.env` (which the
+  full image used to include, `FEDERATOR_JWT_SECRET` and all) and the
+  deployment files out. In slim mode:
+  - the aggregator imported `federator.config`, which needs pydantic, absent
+    from the slim image, so it never wrote the static files Caddy serves;
+  - Caddy proxied writes to `localhost:8444`, its own container, instead of
+    the writer;
+  - per-industry results (`/v1/results/<industry>`) were always 404, because
+    of a wrong rewrite in the `Caddyfile`;
+  - the writer refused every token carrying the issuer and audience the full
+    service requires. It now checks `FEDERATOR_JWT_ISSUER` and
+    `FEDERATOR_JWT_AUDIENCE` (same defaults as the full service), so tokens
+    without them are refused, as in full mode.
+
+  The full Compose file now reads `federator/.env` (documented settings such
+  as `FEDERATOR_CORS_ORIGINS` never reached the service) and its Caddy proxies
+  to the federator (`Caddyfile.full`) instead of using the slim-mode routes.
+  Both Compose files take the domain from `FEDERATOR_DOMAIN` in `.env`
+  instead of an edit to the `Caddyfile`.
+- **Comma-separated CORS origins.** `CONDUCTOR_CORS_ORIGINS` and
+  `FEDERATOR_CORS_ORIGINS` set to a comma-separated list, a single origin,
+  `*` or an empty value stopped the service at startup with a
+  `SettingsError`: only a JSON list worked. They are now parsed as the
+  orchestrator parses `MODUS_CORS_ORIGINS`, and a JSON list still works.
+- **Federator bare-metal install (`deploy.sh --systemd`).** It never
+  completed: it created the virtualenv as the `federator` user in a
+  root-owned `/opt/federator` (permission denied), then copied a
+  `federator/` directory that does not exist where the script runs. The
+  writer unit could not have run either: it passed uvicorn `--fd 0`, which is
+  stdin, not the socket systemd hands over (fd 3), and it was `Type=notify`
+  with a watchdog, which uvicorn never signals, so systemd killed it after
+  the start timeout. The script now installs the package without secrets or
+  deployment files, a root-owned virtualenv, `.env` readable only by the
+  service and the units, then starts the writer and publishes the first
+  static files; re-running it updates an install and keeps the data. The
+  writer unit is `Type=exec` with `--fd 3` and `Restart=on-failure`, and
+  requires `/opt/federator/.env`. The slim writer now refuses to start
+  without `FEDERATOR_JWT_SECRET`, as the full service does, instead of
+  starting and answering every submission with 401.
+- **Federator `deploy.sh --status`.** It requested `http://localhost:443`,
+  plain HTTP on Caddy's TLS port, which always fails, and reported nothing
+  when no check passed. It now checks the service on the address it listens
+  on and `https://<FEDERATOR_DOMAIN>/health` through Caddy, reports each
+  result, and exits non-zero if a check fails. `--status --systemd` checks a
+  bare-metal install. `--setup` waits for the same checks.
+- **Conductor readiness.** `GET /ready` answered 200 with
+  `"status": "not_ready"` when the database was down, so a load balancer or
+  readiness probe kept sending traffic to it, and 500 before the database was
+  initialised. It now answers 503, as the orchestrator does, and logs the
+  cause. The Compose and image health checks probe `/healthz` and are
+  unchanged, so a database outage does not restart the container.
+- **Reported version.** Under `deploy/`, the orchestrator's `/health`,
+  `/ready` and `/version` reported `"version": "latest"`: `MODUS_VERSION` in
+  `.env` is the image tag, and the Compose file passes `.env` to the
+  container, where it also set the orchestrator's `version` setting. The
+  Conductor reported `1.0.0` whatever it was. The version is no longer a
+  setting: the Dockerfiles take a `MODUS_BUILD_VERSION` build argument,
+  check that it is a version, write it into the image and set the
+  `org.opencontainers.image.version` label, and the services report it. An
+  image built without it (such as `docker compose up --build`) reports the
+  version of its source. `publish.yml` passes the release version and fails
+  a release whose version differs from the source's, and CI checks that the
+  orchestrator, Conductor and SDK versions agree (`scripts/check_versions.py`).
+  `MODUS_VERSION` still selects the image tag.
+- **Remaining customer action templates.** `deploy-orchestrator.yml` and
+  `register-app.yml` still used tag-pinned actions on old runtimes, two of
+  which no longer run on current GitHub runners: azure/setup-helm v3 (Node
+  16) and gliech/create-github-secret-action v1 (Node 12). Now
+  aws-actions/configure-aws-credentials 6.3.0 (was v4, Node 20),
+  aws-actions/amazon-ecr-login 2.1.7 (still the latest major),
+  docker/metadata-action 6.2.0 (was v5, Node 20) and azure/setup-helm 5.0.1,
+  each pinned to a full commit SHA with its version in a comment; every
+  step's inputs exist in the pinned version. gliech/create-github-secret-action
+  has had no release since 2022 and has no Node 20 or 24 version, so
+  `register-app.yml` now stores `MODUS_API_KEY` and `MODUS_APP_ID` with
+  `gh secret set`, preinstalled on GitHub-hosted runners, using the same
+  `GH_PAT_SECRETS_WRITE` token and the same repository, with the values on
+  stdin. The production smoke test in `deploy-orchestrator.yml` expected
+  `/ready` to answer `"status": "ready"`, but the orchestrator answers `"ok"`,
+  so every production deploy failed its smoke test; it now checks for `"ok"`.
 
 ## [1.1.0] - 2026-10-09
 

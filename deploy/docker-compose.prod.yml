@@ -79,11 +79,18 @@ services:
       - "${MODUS_CONDUCTOR_PORT:-8090}:8090"
     env_file: .env
     environment:
-      # The Conductor keeps its own database, separate from the Orchestrator's.
-      # Defaults to SQLite; override with MODUS_CONDUCTOR_DATABASE_URL (not
-      # MODUS_DATABASE_URL) so a Postgres Orchestrator doesn't collide here.
-      - MODUS_DATABASE_URL=${MODUS_CONDUCTOR_DATABASE_URL:-sqlite+aiosqlite:///data/conductor.db}
-      - MODUS_PORT=8090
+      # The Conductor reads CONDUCTOR_* variables, not MODUS_*: these map the
+      # shared .env onto them. Any other CONDUCTOR_* setting can go in .env.
+      # It keeps its own database, separate from the Orchestrator's: SQLite on
+      # the conductor_data volume by default; override with
+      # MODUS_CONDUCTOR_DATABASE_URL (not MODUS_DATABASE_URL) so a Postgres
+      # Orchestrator doesn't collide here.
+      - CONDUCTOR_DATABASE_URL=${MODUS_CONDUCTOR_DATABASE_URL:-sqlite+aiosqlite:///data/conductor.db}
+      - CONDUCTOR_ENVIRONMENT=${MODUS_ENVIRONMENT:-production}
+      - CONDUCTOR_AUTH_MODE=${MODUS_AUTH_MODE:-jwt}
+      - CONDUCTOR_JWT_SECRET=${MODUS_JWT_SECRET:-}
+      # Bearer secret the Orchestrators push with (their MODUS_CONDUCTOR_SECRET)
+      - CONDUCTOR_CONDUCTOR_SECRET=${MODUS_CONDUCTOR_SECRET:-}
     volumes:
       - conductor_data:/app/data
     deploy:
@@ -92,7 +99,7 @@ services:
           memory: 384M
           cpus: "1.0"
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8090/health"]
+      test: ["CMD", "curl", "-sf", "http://localhost:8090/healthz"]
       interval: 15s
       timeout: 5s
       start_period: 30s
