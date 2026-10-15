@@ -42,8 +42,8 @@ request is merged.
 ## Development setup
 
 Requirements: Python 3.10+ (3.12 recommended; CI uses 3.12), and Docker if you
-want to try the Compose stack. The SDK alone declares `>=3.9`, but the pinned
-orchestrator dependencies need 3.10 or newer.
+want to try the Compose stack. The SDK and the pinned orchestrator
+dependencies both need 3.10 or newer.
 
 ```bash
 git clone https://github.com/babbguy/Modus.git

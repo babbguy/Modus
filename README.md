@@ -1,7 +1,10 @@
 # Modus
 
 [![CI](https://github.com/babbguy/Modus/actions/workflows/ci.yml/badge.svg)](https://github.com/babbguy/Modus/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/babbguy/Modus)](https://github.com/babbguy/Modus/releases/latest)
 [![License](https://img.shields.io/badge/license-FSL--1.1--ALv2-blue)](LICENSE)
+[![PyPI](https://img.shields.io/pypi/v/modus-agent)](https://pypi.org/project/modus-agent/)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/babbguy/Modus/badge)](https://scorecard.dev/viewer/?uri=github.com/babbguy/Modus)
 
 Modus is a self-hosted AI cost-governance platform. A small Python SDK
 instruments your LLM client libraries, a FastAPI orchestrator evaluates budgets
@@ -68,78 +71,75 @@ tests/          Test suite
 
 ## Quickstart
 
-### Option A: Docker Compose
-
-Requires Docker with Compose v2. This builds the images from the local
-Dockerfiles.
+You need Git and Docker with Compose v2. This starts a single container with
+SQLite, built from the local Dockerfile (the first build takes a few minutes):
 
 ```bash
 git clone https://github.com/babbguy/Modus.git
 cd Modus
-cp .env.example .env
+printf 'MODUS_ENVIRONMENT=development\nMODUS_AUTH_MODE=stub\nMODUS_MASTER_API_KEY=mds_master_%s\n' \
+  "$(openssl rand -hex 24)" > .env
+docker compose -f docker-compose.standalone.yml up --build -d
+curl http://localhost:8080/health
 ```
 
-Edit `.env`. For a throwaway local trial, set `MODUS_ENVIRONMENT=development`
-and `MODUS_AUTH_MODE=stub` (stub auth gives every request admin rights and is
-refused unless `MODUS_ENVIRONMENT=development`). Replace `MODUS_MASTER_API_KEY` with a random value, for
-example `python -c "import secrets; print('mds_master_' + secrets.token_urlsafe(32))"`.
-Then:
+The dashboard is at <http://localhost:8080> and the interactive API docs at
+<http://localhost:8080/docs>. This is a local trial: stub auth gives every
+request admin rights, and the orchestrator accepts it only with
+`MODUS_ENVIRONMENT=development`. Stop it with
+`docker compose -f docker-compose.standalone.yml down` (add `-v` to delete the
+data). For a real deployment, start from `.env.example` and the
+[deployment guide](docs/deployment.md).
 
-```bash
-docker compose up --build        # orchestrator + PostgreSQL
-# or, SQLite only, single container:
-docker compose -f docker-compose.standalone.yml up --build
-```
+### Other ways to run it
 
-The dashboard and API are served at <http://localhost:8080>; interactive API
-docs are at `/docs` outside production mode.
+- **With PostgreSQL:** `cp .env.example .env`, set `POSTGRES_PASSWORD` and
+  `MODUS_MASTER_API_KEY` (for a trial also `MODUS_ENVIRONMENT=development` and
+  `MODUS_AUTH_MODE=stub`), then `docker compose up --build -d`.
+- **From Python** (3.10+; CI and the images use 3.12):
 
-### Option B: Run from Python
+  ```bash
+  python -m venv .venv && source .venv/bin/activate     # Windows: .venv\Scripts\activate
+  pip install -r orchestrator/requirements.txt
+  export MODUS_ENVIRONMENT=development MODUS_AUTH_MODE=stub
+  export MODUS_DATABASE_URL=sqlite+aiosqlite:///modus.db
+  export MODUS_MASTER_API_KEY=mds_master_$(python -c "import secrets; print(secrets.token_urlsafe(32))")
+  python -m uvicorn orchestrator.main:app --host 127.0.0.1 --port 8080
+  ```
 
-Requires Python 3.10+ (3.12 recommended; CI and the Docker images use 3.12).
-The pinned orchestrator dependencies do not install on 3.9. The SDK alone
-declares `>=3.9`.
-
-```bash
-git clone https://github.com/babbguy/Modus.git
-cd Modus
-python -m venv .venv && source .venv/bin/activate     # Windows: .venv\Scripts\activate
-pip install -r orchestrator/requirements.txt
-
-export MODUS_ENVIRONMENT=development
-export MODUS_AUTH_MODE=stub
-export MODUS_DATABASE_URL=sqlite+aiosqlite:///modus.db
-export MODUS_MASTER_API_KEY=mds_master_$(python -c "import secrets; print(secrets.token_urlsafe(32))")
-
-python -m uvicorn orchestrator.main:app --host 127.0.0.1 --port 8080
-```
+- **Published images, Helm, install scripts:** see the
+  [deployment guide](docs/deployment.md). Release images are signed; see
+  [Verifying releases](docs/verifying-releases.md).
 
 ### Instrument an application
 
-Install the SDK from your clone (a PyPI release is not published yet):
+Install the SDK, `modus-agent` (Python 3.10+, standard library only):
 
 ```bash
-pip install ./sdk
-export MODUS_URL=http://localhost:8080
+pip install modus-agent        # from PyPI, published from v1.2.0
+# or, from the clone: pip install ./sdk
 ```
 
-The SDK registers itself using a team registration token. With the local
-development setup above (stub auth), create a team and a token like this
-(`MODUS_MASTER_API_KEY` is the value you set for the orchestrator):
+The SDK registers itself with a team registration token. Against the local
+trial above (stub auth), create a team and a token:
 
 ```bash
-curl -s -X POST "$MODUS_URL/api/v1/teams"   -H "Content-Type: application/json"   -d '{"slug": "demo", "name": "Demo"}'
+export MODUS_URL=http://localhost:8080
+set -a; . ./.env; set +a          # loads MODUS_MASTER_API_KEY
+
+curl -s -X POST "$MODUS_URL/api/v1/teams" \
+  -H "Content-Type: application/json" -d '{"slug": "demo", "name": "Demo"}'
 # note the "id" in the response, then:
-curl -s -X POST "$MODUS_URL/api/v1/teams/<id>/registration-token"   -H "X-Modus-APIKey: $MODUS_MASTER_API_KEY"
+curl -s -X POST "$MODUS_URL/api/v1/teams/<id>/registration-token" \
+  -H "X-Modus-APIKey: $MODUS_MASTER_API_KEY"
 # copy "registration_token" (shown once) from the response:
 export MODUS_TEAM_TOKEN=mds_team_...
 ```
 
-With `MODUS_AUTH_MODE=jwt`, send the same master key (`-H "X-Modus-APIKey:
+With `MODUS_AUTH_MODE=jwt`, send the master key (`-H "X-Modus-APIKey:
 $MODUS_MASTER_API_KEY"`) or an admin bearer token when creating the team; see
 [Authentication](docs/deployment.md#authentication). The master key is a root
 credential, so keep it secret.
-
 
 Then make `import modus` the first import of your entry point:
 
@@ -228,6 +228,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution workflow.
 
 - [Architecture](docs/ARCHITECTURE.md)
 - [Deployment guide](docs/deployment.md)
+- [Verifying releases](docs/verifying-releases.md)
 - [User guide](docs/USER_GUIDE.md)
 - [Developer onboarding](docs/DEVELOPER_ONBOARDING.md)
 - [Task guides](docs/guides/INDEX.md)

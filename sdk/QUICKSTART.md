@@ -37,7 +37,8 @@ No per-app account creation or pre-registration: the app registers itself.
 ## Step 2 — Install
 
 ```bash
-# From the repository root (a PyPI release is not published yet):
+pip install modus-agent    # from PyPI, published from v1.2.0
+# or, from a clone of this repository:
 pip install ./sdk
 ```
 

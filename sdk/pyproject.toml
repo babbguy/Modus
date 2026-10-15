@@ -10,18 +10,19 @@ readme = "README.md"
 license = "FSL-1.1-ALv2"
 license-files = ["LICENSE"]
 authors = [{name = "babbguy"}]
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 keywords = ["ai", "cost", "governance", "llm", "anthropic", "openai", "bedrock", "policy"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3 :: Only",
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Topic :: System :: Monitoring",
+    "Typing :: Typed",
 ]
 
 # Zero required dependencies — uses stdlib only for core functionality.

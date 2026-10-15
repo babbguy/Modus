@@ -25,7 +25,8 @@ There is no per-app sign-up: your app registers itself the first time it starts
 ## Option A — install the SDK (Python)
 
 ```bash
-# From a clone of this repository (the PyPI package is not published yet):
+pip install modus-agent    # from PyPI, published from v1.2.0
+# or, from a clone of this repository:
 pip install ./sdk
 ```
 

@@ -4,13 +4,15 @@
 # Compose file for running Modus on your own infrastructure.
 #
 # Standalone (single app):
-#   docker compose up --build -d   (builds images from this checkout)
+#   docker compose -f docker-compose.prod.yml up --build -d   (builds from this checkout)
 #
 # Org-wide (multi-app with Conductor):
-#   docker compose --profile org-wide up --build -d
+#   docker compose -f docker-compose.prod.yml --profile org-wide up --build -d
 #
-# Run from the deploy/ directory. Published images (if any) can be used by
-# dropping --build and setting MODUS_VERSION.
+# Run from the deploy/ directory (install.sh does this for you). To use the
+# published images instead, set MODUS_VERSION in .env, run
+# `docker compose -f docker-compose.prod.yml pull` and drop --build; see
+# docs/verifying-releases.md.
 #
 # All data stays on YOUR infrastructure. SQLite by default — no external DB needed.
 # Fits on a $5/mo VPS (384MB memory limit per container).

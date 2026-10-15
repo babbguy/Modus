@@ -38,6 +38,50 @@ updates:
       - dependency-name: "sqlalchemy"
         versions: [">=2.1"]
 
+  # Base images in the Dockerfiles (Dockerfile, Dockerfile.orchestrator,
+  # Dockerfile.conductor; federator/Dockerfile, federator/Dockerfile.slim).
+  # They are pinned by digest; Dependabot moves the digest when the tag is
+  # rebuilt upstream (security fixes in the base image).
+  - package-ecosystem: "docker"
+    directories:
+      - "/"
+      - "/federator"
+    target-branch: "develop"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 1
+    groups:
+      docker:
+        patterns: ["*"]
+    labels:
+      - "dependencies"
+    ignore:
+      # Moving to a newer Python (3.13, 3.14) is a deliberate change, not a
+      # routine update; digest updates within 3.12 still arrive.
+      - dependency-name: "python"
+        update-types: ["version-update:semver-minor"]
+
+  # Third-party images in the Compose files (PostgreSQL in
+  # docker-compose.yml, Caddy in the federator files), pinned by digest.
+  - package-ecosystem: "docker-compose"
+    directories:
+      - "/"
+      - "/federator"
+    target-branch: "develop"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 1
+    groups:
+      docker-compose:
+        patterns: ["*"]
+    labels:
+      - "dependencies"
+    ignore:
+      # A new PostgreSQL major version needs a dump and restore of existing
+      # data, so it is never an automatic update.
+      - dependency-name: "postgres"
+        update-types: ["version-update:semver-major"]
+
   # GitHub Actions
   - package-ecosystem: "github-actions"
     directory: "/"

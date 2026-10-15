@@ -2,39 +2,58 @@
 
 ## Supported Versions
 
-Modus is a portfolio project maintained on a best-effort basis. Only the latest
-release on the `main` branch receives security fixes.
+Modus is maintained by one person on a best-effort basis. Security fixes go
+into a new release of the latest minor version; older versions do not receive
+fixes, so upgrade to the latest release to get them.
 
 | Version | Supported |
 | ------- | --------- |
-| 1.x     | Yes       |
-| < 1.0   | No        |
+| 1.1.x   | Yes       |
+| < 1.1   | No        |
 
 ## Reporting a Vulnerability
 
-If you discover a vulnerability in Modus, please report it privately.
+**Do not open a public GitHub issue, discussion or pull request for a
+security vulnerability.**
 
-**Do not open a public GitHub issue for security vulnerabilities.**
-
-Use GitHub private vulnerability reporting:
+Report it privately through GitHub's private vulnerability reporting:
 
 <https://github.com/babbguy/Modus/security/advisories/new>
 
-Please include:
+(or **Security** tab, then **Report a vulnerability**). Only the maintainer
+can see the report. Please include:
 
-- A description of the vulnerability
-- Steps to reproduce
+- A description of the vulnerability and its potential impact
+- Steps to reproduce, or a proof of concept
 - Affected versions or commits
-- Potential impact
 - A suggested fix, if you have one
 
 ### What to expect
 
-This is a volunteer-maintained project, so there are no guaranteed response or
-fix times. Reports will be looked at as time allows, confirmed issues will be
-fixed as quickly as reasonably possible, and reporters will be credited unless
-they prefer to stay anonymous. Please allow time for a fix before any public
-disclosure.
+This is a single-maintainer project, so there are no guaranteed response or
+fix times. The aim is to acknowledge a report within a week and to keep you
+informed while it is investigated. Confirmed issues are fixed in a new release
+and published as a GitHub security advisory, with a CVE where one applies.
+Reporters are credited unless they prefer to stay anonymous. Please allow time
+for a fix to be released before any public disclosure.
+
+## Verifying releases
+
+From v1.2.0, the container images are signed with cosign (Sigstore keyless)
+and carry SLSA build provenance and an SPDX SBOM as GitHub artifact
+attestations; the `modus-agent` package on PyPI carries a provenance
+attestation. For example:
+
+```bash
+cosign verify ghcr.io/babbguy/modus-orchestrator:1.2.0 \
+  --certificate-identity-regexp '^https://github\.com/babbguy/Modus/\.github/workflows/publish\.yml@refs/tags/v' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+gh attestation verify oci://ghcr.io/babbguy/modus-orchestrator:1.2.0 -R babbguy/Modus
+```
+
+See [docs/verifying-releases.md](docs/verifying-releases.md) for the SBOM, the
+PyPI package and deploying by digest.
 
 ## Security best practices when deploying Modus
 

@@ -1,0 +1,84 @@
+# =============================================================================
+# Modus — Publish the SDK (modus-agent) to PyPI
+# =============================================================================
+# Triggers:
+#   - Version tags: v* (e.g., v1.2.0) build, check and publish
+#   - Manual run (workflow_dispatch) builds and checks only; it never publishes
+#
+# Publishing uses PyPI trusted publishing (OIDC, no API token) from the `pypi`
+# environment, and uploads PEP 740 attestations with the distributions.
+# =============================================================================
+
+name: Publish SDK to PyPI
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+
+  # ── Build and check ──────────────────────────────────────────────────────
+  build:
+    name: Build and check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install build tools
+        run: pip install build==1.6.1 twine==7.0.0
+
+      - name: Tag matches the SDK version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          SDK_VERSION=$(python -c "import tomllib; print(tomllib.load(open('sdk/pyproject.toml','rb'))['project']['version'])")
+          if [ "${GITHUB_REF_NAME#v}" != "$SDK_VERSION" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match sdk/pyproject.toml version ${SDK_VERSION}"
+            exit 1
+          fi
+
+      - name: Build the sdist and wheel
+        run: python -m build sdk --outdir dist
+
+      - name: Check the distributions
+        run: twine check --strict dist/*
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sdk-dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  # ── Publish (tag pushes only) ────────────────────────────────────────────
+  publish:
+    name: Publish to PyPI
+    needs: build
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/modus-agent/
+    permissions:
+      id-token: write  # trusted publishing and PEP 740 attestations
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: sdk-dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          packages-dir: dist/
+          attestations: true

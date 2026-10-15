@@ -1,12 +1,14 @@
 # Modus Agent
 
 AI cost governance and policy enforcement for Python applications. The SDK
-uses only the Python standard library and declares `requires-python >=3.9`.
+uses only the Python standard library and requires Python 3.10 or newer.
 
 ## Install
 
 ```bash
-# From the repository root (a PyPI release is not published yet):
+pip install modus-agent       # from PyPI (published from v1.2.0)
+
+# or from source, in a clone of the repository:
 pip install ./sdk
 
 # or straight from GitHub:
@@ -18,9 +20,9 @@ pip install "modus-agent @ git+https://github.com/babbguy/Modus.git#subdirectory
 ### Step 1 — Your admin does this once per team
 
 ```bash
-# 1. Create a team. This needs admin access: an admin bearer JWT when the
-#    orchestrator runs with MODUS_AUTH_MODE=jwt, or no header at all in local
-#    stub mode. (The master key is NOT accepted here.)
+# 1. Create a team. This needs admin access: an admin bearer JWT or the
+#    master key (-H "X-Modus-APIKey: mds_master_xxx") when the orchestrator
+#    runs with MODUS_AUTH_MODE=jwt, or no header at all in local stub mode.
 curl -X POST https://your-orchestrator/api/v1/teams \
   -H "Authorization: Bearer $ADMIN_JWT" \
   -H "Content-Type: application/json" \
@@ -34,7 +36,7 @@ curl -X POST https://your-orchestrator/api/v1/teams/<team id>/registration-token
 # Share this token with your team. That's the only secret they need.
 ```
 
-See the [deployment guide](../docs/deployment.md#authentication) for how to
+See the [deployment guide](https://github.com/babbguy/Modus/blob/main/docs/deployment.md#authentication) for how to
 mint an admin JWT.
 
 ### Step 2 — Developers set two environment variables
