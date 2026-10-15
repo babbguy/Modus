@@ -25,6 +25,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   identifier in the SDK package metadata, source file headers, the container
   image label and the dashboard Settings view is now `FSL-1.1-ALv2`, and the
   SDK wheel and sdist now include the license text (`sdk/LICENSE`).
+- **Python dependencies upgraded** (`orchestrator/requirements.txt`):
+  fastapi 0.135.3 → 0.136.3, uvicorn 0.44.0 → 0.54.0, uvloop 0.21.0 → 0.23.0,
+  SQLAlchemy 2.0.49 → 2.0.54, asyncpg 0.30.0 → 0.31.0, aiosqlite 0.20.0 →
+  0.22.1, alembic 1.14.0 → 1.20.0, psycopg2-binary 2.9.10 → 2.9.13, pydantic
+  2.10.0 → 2.13.5, pydantic-settings 2.6.0 → 2.15.0, bcrypt 4.2.0 → 5.0.0,
+  PyJWT 2.9.0 → 2.15.1, cryptography 44.0.0 → 50.0.2, prometheus-client
+  0.21.0 → 0.26.0, httpx 0.28.0 → 0.28.1, aiosmtplib 3.0.2 → 5.1.3 and
+  python-multipart 0.0.24 → 0.0.32. Development tools (`requirements-dev.txt`):
+  pytest 9.1.1, pytest-asyncio 1.4.0, pytest-cov 7.1.0, ruff 0.17.0 and mypy
+  2.4.0. SQLAlchemy stays on the 2.0 series because 2.1 requires Python 3.11
+  and Modus supports Python 3.10. FastAPI stays below 0.137, which builds its
+  route tables lazily on the event loop during the first requests to each
+  router. Existing keys, tokens, encrypted credentials and audit checkpoints
+  keep working unchanged. What operators may notice:
+  - An API key, team registration token or invitation token longer than 72
+    bytes is refused like any other wrong one (401 on ingest and
+    self-registration, 404 on accepting an invitation). bcrypt 5 cannot check
+    such input; Modus never issues one (its keys and tokens are 36 to 54
+    bytes).
+  - `MODUS_API_KEY_PREFIX` may be at most 40 bytes, so that an issued key fits
+    in bcrypt's 72-byte limit. A longer prefix now stops the orchestrator at
+    startup with a configuration error.
+  - With `MODUS_AUTH_MODE=jwt`, a token whose `sub` claim is not a string is
+    refused with 401 ("Token validation failed: Subject must be a string" in
+    the log). With an HS256 secret, `MODUS_JWT_SECRET` should be at least 32
+    bytes; a shorter one still works, but PyJWT writes an
+    `InsecureKeyLengthWarning` to the server's error output.
+  - `alembic.ini` uses `path_separator` instead of the deprecated
+    `version_path_separator`.
 
 ## [1.1.0] - 2026-10-09
 
