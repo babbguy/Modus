@@ -1,9 +1,13 @@
 version: 2
 
 updates:
-  # Python dependencies (orchestrator)
+  # Python dependencies: orchestrator, conductor and federator. They pin the
+  # same versions, so one grouped pull request keeps them in step.
   - package-ecosystem: "pip"
-    directory: "/orchestrator"
+    directories:
+      - "/orchestrator"
+      - "/conductor"
+      - "/federator"
     target-branch: "develop"
     schedule:
       interval: "monthly"
@@ -14,6 +18,25 @@ updates:
         patterns: ["*"]
     labels:
       - "dependencies"
+    # Held-back upgrades. These rules only filter version updates: with
+    # target-branch set, options in this block do not apply to security
+    # updates (GitHub's Dependabot options reference, "target-branch").
+    ignore:
+      # FastAPI 0.137+ keeps each included router as one node in app.routes
+      # and builds its route table lazily, on the event loop, on the first
+      # request that reaches it. CI caught the stall (first request to a
+      # router blocked the loop for 65 ms, 355 ms under coverage; the
+      # off-event-loop hashing test failed), and three tests that walk
+      # app.routes would pass while checking nothing. Revisit once the route
+      # tables are built at startup and those tests walk the expanded routes.
+      - dependency-name: "fastapi"
+        versions: [">=0.137"]
+      # SQLAlchemy 2.1 requires Python 3.11; Modus supports Python 3.10+
+      # (README, CONTRIBUTING, docs/deployment.md). Revisit when the minimum
+      # Python is raised to 3.11 (Python 3.10 reaches end of life in
+      # October 2026).
+      - dependency-name: "sqlalchemy"
+        versions: [">=2.1"]
 
   # GitHub Actions
   - package-ecosystem: "github-actions"
