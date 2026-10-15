@@ -81,7 +81,7 @@ Run it from the `deploy/` directory:
 cd deploy
 ./install.sh               # copies .env.example to .env, generates a master key,
                            # builds the images and waits for /health
-./install.sh --org-wide    # also starts the Conductor
+./install.sh --org-wide    # also starts the Conductor (and generates MODUS_CONDUCTOR_SECRET)
 ./upgrade.sh               # git pull --ff-only, back up the database, rebuild, restart; rolls back if the health check fails
 ./uninstall.sh [--purge]   # stop containers (--purge also removes data)
 ```
@@ -90,6 +90,14 @@ The scripts build from your checkout. `deploy/.env.example` ships
 `MODUS_ENVIRONMENT=production` and `MODUS_AUTH_MODE=jwt`, so set
 `MODUS_JWT_SECRET` (see "Authentication"); the interactive API docs are
 disabled in production mode.
+
+The Conductor reads `CONDUCTOR_*` variables. The Compose file maps the shared
+`.env` onto them: `MODUS_ENVIRONMENT`, `MODUS_AUTH_MODE` and
+`MODUS_JWT_SECRET` as for the orchestrator, `MODUS_CONDUCTOR_SECRET` (the
+shared secret Orchestrators push with; required in production) and
+`MODUS_CONDUCTOR_DATABASE_URL` (default: SQLite on the `conductor_data`
+volume). Any other Conductor setting, such as `CONDUCTOR_CORS_ORIGINS`
+(comma-separated), can be set in `.env` directly.
 
 ### Option 5: Kubernetes (Helm)
 
@@ -343,7 +351,8 @@ deployment does not use it, and federation is disabled by default
 (`MODUS_FEDERATION_ENABLED=false`).
 
 Two shapes are provided in `federator/` (copy `federator/.env.example` to
-`.env` and set `FEDERATOR_JWT_SECRET` first):
+`.env` and set `FEDERATOR_JWT_SECRET`, and `FEDERATOR_DOMAIN` for Caddy's TLS
+certificate, first):
 
 ```bash
 cd federator
@@ -359,9 +368,11 @@ or run Compose directly: `docker compose -f docker-compose.slim.yml up -d`
 static JSON and a Python write handler takes submissions.
 
 Key settings (all read as `FEDERATOR_<NAME>`; see `federator/config.py`):
-`JWT_SECRET` (required), `DATABASE_URL`, `PORT` (default 8443),
+`JWT_SECRET` (required), `JWT_ISSUER` and `JWT_AUDIENCE` (the `iss` and `aud`
+every token must carry; defaults `modus-orchestrator` and `modus-federator`,
+in both modes), `DATABASE_URL`, `PORT` (default 8443),
 `RATE_LIMIT_SUBMITS_PER_HOUR`, `RATE_LIMIT_READS_PER_HOUR`,
-`MIN_CONTRIBUTORS_FOR_RESULT` (default 3) and `CORS_ORIGINS`.
+`MIN_CONTRIBUTORS_FOR_RESULT` (default 3) and `CORS_ORIGINS` (comma-separated).
 
 ## Health checks
 
@@ -370,3 +381,10 @@ Orchestrator:
 - `GET /health`: liveness
 - `GET /ready`: readiness (includes a database check)
 - `GET /metrics`: Prometheus metrics (`MODUS_METRICS_ENABLED`, on by default)
+
+Conductor:
+
+- `GET /healthz`: liveness (the image's and the Compose file's health check)
+- `GET /ready`: readiness
+
+Federator: `GET /health` (liveness) and, in full mode, `GET /ready`.

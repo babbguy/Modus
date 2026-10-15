@@ -98,6 +98,12 @@ fi
 if [ "${ORG_WIDE}" = true ]; then
     sed -i.bak 's|^MODUS_MODE=standalone|MODUS_MODE=org-wide|' .env
     rm -f .env.bak
+    # The Conductor refuses to start in production without a push secret.
+    if ! grep -q '^MODUS_CONDUCTOR_SECRET=.' .env 2>/dev/null; then
+        CONDUCTOR_SECRET="$(openssl rand -hex 32 2>/dev/null || python3 -c 'import secrets; print(secrets.token_hex(32))')"
+        printf '\nMODUS_CONDUCTOR_SECRET=%s\n' "${CONDUCTOR_SECRET}" >> .env
+        log "Generated Conductor push secret (MODUS_CONDUCTOR_SECRET in deploy/.env)"
+    fi
     log "Configured for org-wide mode (Conductor enabled)"
 fi
 

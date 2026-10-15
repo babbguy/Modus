@@ -24,6 +24,9 @@ services:
       - caddy-data:/data
       - caddy-config:/config
       - static-data:/data/static:ro
+    environment:
+      - FEDERATOR_DOMAIN=${FEDERATOR_DOMAIN:-federator.example.com}
+      - FEDERATOR_WRITER_UPSTREAM=writer:8444
     depends_on:
       - writer
     deploy:
@@ -48,6 +51,8 @@ services:
     environment:
       - FEDERATOR_DB_PATH=/data/federator.db
       - FEDERATOR_JWT_SECRET=${FEDERATOR_JWT_SECRET}
+      - FEDERATOR_JWT_ISSUER=${FEDERATOR_JWT_ISSUER:-modus-orchestrator}
+      - FEDERATOR_JWT_AUDIENCE=${FEDERATOR_JWT_AUDIENCE:-modus-federator}
       - FEDERATOR_MAX_PAYLOAD_BYTES=65536
       - FEDERATOR_RATE_LIMIT_SUBMITS_PER_HOUR=10
     volumes:
@@ -72,6 +77,14 @@ services:
       dockerfile: Dockerfile.slim
     container_name: modus-aggregator
     restart: always
+    # The writer creates the database on startup; wait for it.
+    depends_on:
+      writer:
+        condition: service_healthy
+    # The image's health check probes the writer's port; this container
+    # serves nothing.
+    healthcheck:
+      disable: true
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |

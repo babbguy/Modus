@@ -6,10 +6,14 @@
 # This eliminates the need for a persistent Python process for reads.
 # RAM usage: ~10MB (Caddy only) when idle.
 #
-# Replace federator.example.com with your actual domain.
-# Caddy automatically provisions Let's Encrypt TLS certificates.
+# Set FEDERATOR_DOMAIN (in .env for Docker Compose, in Caddy's environment
+# otherwise) to your actual domain. Caddy automatically provisions Let's Encrypt
+# TLS certificates for it.
+#
+# FEDERATOR_WRITER_UPSTREAM is the write handler's address: localhost:8444 with
+# the systemd units, writer:8444 in docker-compose.slim.yml.
 
-federator.example.com {
+{$FEDERATOR_DOMAIN:federator.example.com} {
     # Security headers (all responses)
     header {
         Strict-Transport-Security "max-age=31536000; includeSubDomains"
@@ -54,7 +58,7 @@ federator.example.com {
     handle /v1/results/* {
         # /v1/results/healthcare → /results/healthcare.json
         uri strip_prefix /v1/results
-        uri path_regexp (.+) {1}.json
+        uri path_regexp ^(.+)$ $1.json
         root * /data/static/results
         file_server
     }
@@ -70,11 +74,11 @@ federator.example.com {
     # via systemd socket activation — zero RAM when idle.
 
     handle /v1/deltas {
-        reverse_proxy localhost:8444
+        reverse_proxy {$FEDERATOR_WRITER_UPSTREAM:localhost:8444}
     }
 
     handle /v1/audit/verify-inclusion {
-        reverse_proxy localhost:8444
+        reverse_proxy {$FEDERATOR_WRITER_UPSTREAM:localhost:8444}
     }
 
     # ── Catch-all ────────────────────────────────────────────────

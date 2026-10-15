@@ -2,8 +2,9 @@
 # Self-hosted deployment.
 #
 # Prerequisites:
-#   1. TLS cert via Let's Encrypt (certbot)
-#   2. .env file with FEDERATOR_JWT_SECRET
+#   1. A domain pointing at this host (Caddy obtains its Let's Encrypt cert)
+#   2. .env file (copy .env.example) with FEDERATOR_JWT_SECRET and
+#      FEDERATOR_DOMAIN; its other FEDERATOR_* settings reach the service too
 #
 # Usage:
 #   docker compose up -d
@@ -16,6 +17,7 @@ services:
     restart: always
     ports:
       - "8443:8443"
+    env_file: .env
     environment:
       - FEDERATOR_DATABASE_URL=sqlite+aiosqlite:////data/federator.db
       - FEDERATOR_ENVIRONMENT=production
@@ -47,9 +49,11 @@ services:
       - "443:443"
       - "80:80"
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./Caddyfile.full:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
       - caddy-config:/config
+    environment:
+      - FEDERATOR_DOMAIN=${FEDERATOR_DOMAIN:-federator.example.com}
     depends_on:
       - federator
 
