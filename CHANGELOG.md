@@ -26,6 +26,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   image label and the dashboard Settings view is now `FSL-1.1-ALv2`, and the
   SDK wheel and sdist now include the license text (`sdk/LICENSE`).
 
+- **CI actions upgraded and pinned.** Every action in `.github/workflows/` now
+  runs its latest major (checkout 7, setup-python 7, setup-node 7,
+  upload-artifact 7, github-script 9, docker setup-buildx 4, login 4,
+  build-push 7, action-gh-release 3, gh-action-pypi-publish 1.14) and is
+  pinned to a full commit SHA with the version in a comment. They all run on
+  Node 24, so the reusable `modus-policy-sync.yml` workflow needs GitHub
+  Actions runner 2.327.1 or later on self-hosted runners (GitHub-hosted
+  runners already qualify). Its pull-request plan comment now waits for the
+  API call, so a failed comment fails the step instead of passing silently.
+  `publish.yml` gains a `dry_run` input for manual runs that builds both
+  images without pushing them; tag pushes publish as before.
+
 ## [1.1.0] - 2026-10-09
 
 ### Added
