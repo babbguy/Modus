@@ -360,12 +360,46 @@ cd federator
 ./deploy.sh --setup          # slim, static-first mode with Docker Compose (default)
 ./deploy.sh --setup --full   # full FastAPI stack
 ./deploy.sh --systemd        # install the systemd units in federator/systemd/ (bare metal, no Docker)
-./deploy.sh --status         # check health
+./deploy.sh --status         # check health (add --full or --systemd for those installs)
 ```
 
 or run Compose directly: `docker compose -f docker-compose.slim.yml up -d`
 (slim) or `docker compose up -d` (full). In slim mode Caddy serves pre-computed
 static JSON and a Python write handler takes submissions.
+
+`--status` exits non-zero if a check fails. It checks the service behind
+Caddy on the address it really listens on (the full container on
+`http://127.0.0.1:8443`, the slim writer's container health check, or the
+systemd writer on `http://127.0.0.1:8444`), then `https://<FEDERATOR_DOMAIN>/health`
+through Caddy on 443, resolved to this host. A certificate Caddy cannot get
+publicly trusted (for example `localhost`, which uses Caddy's internal CA) is
+reported as a warning.
+
+### Bare metal (systemd)
+
+`./deploy.sh --systemd` (as root or with sudo; needs systemd, python3 with
+`venv`, tar and curl) installs the slim mode without Docker:
+
+- the `federator` package in `/opt/federator/federator` (root-owned; no
+  `.env`, databases or deployment files) and a virtualenv with
+  `requirements-slim.txt` in `/opt/federator/venv`;
+- `.env` as `/opt/federator/.env` (mode 640, group `federator`);
+- the data in `/data` (`federator.db` and `/data/static`), owned by the
+  `federator` system user;
+- `federator-writer.socket`, which holds `127.0.0.1:8444` and starts
+  `federator-writer.service` on the first connection, and
+  `federator-aggregate.timer`, which publishes the static JSON hourly.
+
+It then starts the writer (which creates the database) and runs the first
+aggregation. Re-running it updates the code, dependencies, settings and units
+and restarts the writer; the data is kept.
+
+The writer needs `FEDERATOR_JWT_SECRET`: without it the service refuses to
+start (`journalctl -u federator-writer`). Caddy is not installed by the
+script: install it, use `federator/Caddyfile`, and set `FEDERATOR_DOMAIN` in
+Caddy's environment (for example a `caddy.service.d` drop-in with
+`Environment=FEDERATOR_DOMAIN=federator.example.com`). Check the install with
+`./deploy.sh --status --systemd`.
 
 Key settings (all read as `FEDERATOR_<NAME>`; see `federator/config.py`):
 `JWT_SECRET` (required), `JWT_ISSUER` and `JWT_AUDIENCE` (the `iss` and `aud`

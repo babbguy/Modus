@@ -9,11 +9,13 @@
 #   ./deploy.sh --setup         # Deploy slim mode (default)
 #   ./deploy.sh --setup --full  # Deploy full mode
 #   ./deploy.sh --update        # Rebuild and restart
-#   ./deploy.sh --status        # Check health
+#   ./deploy.sh --status        # Check health (add --full for the full stack)
 #   ./deploy.sh --systemd       # Install systemd units (bare metal, no Docker)
+#   ./deploy.sh --status --systemd  # Check a bare-metal install
 #
 # Prerequisites:
-#   - Docker and Docker Compose installed
+#   - Docker and Docker Compose installed (not needed for --systemd, which
+#     needs systemd, python3 with venv, tar and curl; run it as root or with sudo)
 #   - Domain pointing to this VPS (for TLS via Caddy)
 #   - .env file configured (copy from .env.example)
 
@@ -35,19 +37,24 @@ info() { echo -e "${CYAN}[federator]${NC} $1"; }
 
 MODE="slim"
 [[ " $* " == *" --full "* ]] && MODE="full"
+[[ " $* " == *" --systemd "* ]] && MODE="systemd"
+
+# Bare-metal (--systemd) layout; the units in systemd/ use these paths.
+APP_DIR=/opt/federator
+DATA_DIR=/data
+
+# Run a command as root: directly when already root, otherwise via sudo.
+as_root() {
+    if [ "$(id -u)" -eq 0 ]; then
+        "$@"
+    else
+        sudo "$@"
+    fi
+}
 
 # ── Shared checks ────────────────────────────────────────────────────────────
 
-check_prereqs() {
-    if ! command -v docker &>/dev/null; then
-        err "Docker not found. Install: https://docs.docker.com/engine/install/"
-        exit 1
-    fi
-    if ! command -v docker compose &>/dev/null && ! command -v docker-compose &>/dev/null; then
-        err "Docker Compose not found."
-        exit 1
-    fi
-
+check_env() {
     if [ ! -f .env ]; then
         if [ -f .env.example ]; then
             cp .env.example .env
@@ -64,6 +71,85 @@ check_prereqs() {
         err "FEDERATOR_JWT_SECRET is still the default value. Change it!"
         exit 1
     fi
+
+    if ! grep -Eq '^FEDERATOR_JWT_SECRET=.+' .env; then
+        err "FEDERATOR_JWT_SECRET is not set in .env."
+        exit 1
+    fi
+}
+
+check_prereqs() {
+    if ! command -v docker &>/dev/null; then
+        err "Docker not found. Install: https://docs.docker.com/engine/install/"
+        exit 1
+    fi
+    if ! docker compose version &>/dev/null; then
+        err "Docker Compose not found."
+        exit 1
+    fi
+
+    check_env
+}
+
+# The domain Caddy serves (FEDERATOR_DOMAIN in .env).
+federator_domain() {
+    local domain=""
+    if [ -f .env ]; then
+        domain=$(grep -E '^FEDERATOR_DOMAIN=' .env | tail -n 1 | cut -d= -f2- | tr -d '"'"'"'[:space:]')
+    fi
+    echo "${domain:-federator.example.com}"
+}
+
+# GET /health through Caddy: HTTPS on 443 for FEDERATOR_DOMAIN, resolved to
+# this host so it works before DNS does. The certificate is verified first;
+# an untrusted one (e.g. Caddy's internal CA for localhost) is reported.
+check_public_health() {
+    local domain body rc
+    domain=$(federator_domain)
+    body=$(curl -sS --max-time 5 --resolve "${domain}:443:127.0.0.1"         "https://${domain}/health" 2>/dev/null) && rc=0 || rc=$?
+    if [ "$rc" -eq 0 ]; then
+        log "HTTPS https://${domain}/health (via Caddy on 443): OK ${body}"
+        return 0
+    fi
+    if [ "$rc" -eq 60 ] && body=$(curl -sS -k --max-time 5             --resolve "${domain}:443:127.0.0.1" "https://${domain}/health" 2>/dev/null); then
+        warn "HTTPS https://${domain}/health (via Caddy on 443): responds, but its TLS certificate is not trusted: ${body}"
+        return 0
+    fi
+    warn "HTTPS https://${domain}/health (via Caddy on 443): no response (curl exit ${rc})"
+    return 1
+}
+
+# GET /health on the service behind Caddy, by the address it really listens on.
+check_backend_health() {
+    local body state
+    case "$MODE" in
+        full)
+            # The federator container publishes plain HTTP on 8443.
+            if body=$(curl -sS --max-time 5 http://127.0.0.1:8443/health 2>/dev/null); then
+                log "Federator http://127.0.0.1:8443/health: OK ${body}"
+                return 0
+            fi
+            warn "Federator http://127.0.0.1:8443/health: no response"
+            ;;
+        slim)
+            # The writer's port is not published; use its container health check.
+            state=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}no healthcheck{{end}}'                 modus-writer 2>/dev/null || echo "not running")
+            if [ "$state" = "healthy" ]; then
+                log "Writer container: healthy"
+                return 0
+            fi
+            warn "Writer container: ${state}"
+            ;;
+        systemd)
+            # The writer socket (plain HTTP, loopback only) starts it on demand.
+            if body=$(curl -sS --max-time 10 http://127.0.0.1:8444/health 2>/dev/null); then
+                log "Writer http://127.0.0.1:8444/health: OK ${body}"
+                return 0
+            fi
+            warn "Writer http://127.0.0.1:8444/health: no response"
+            ;;
+    esac
+    return 1
 }
 
 # ── Commands ─────────────────────────────────────────────────────────────────
@@ -96,12 +182,21 @@ setup() {
         docker compose up -d
     fi
 
-    sleep 3
     log "Checking health..."
-    if curl -sf http://localhost:443/health 2>/dev/null || curl -sf http://localhost:8443/health 2>/dev/null || curl -sf http://localhost:8444/health 2>/dev/null; then
-        echo ""
+    local healthy=false
+    for _ in $(seq 1 30); do
+        if check_backend_health >/dev/null 2>&1; then
+            healthy=true
+            break
+        fi
+        sleep 2
+    done
+    if [ "$healthy" = true ]; then
+        check_backend_health || true
+        check_public_health || warn "Caddy is not serving HTTPS yet (DNS or certificate?) — check: docker logs modus-caddy"
         log "Federator is healthy!"
     else
+        check_backend_health || true
         warn "Health check not responding yet — check logs"
     fi
 
@@ -134,78 +229,116 @@ update() {
 }
 
 status() {
-    log "Checking Modus Federator status..."
+    log "Checking Modus Federator status (${MODE} mode)..."
     echo ""
 
-    if [ "$MODE" = "slim" ]; then
-        docker compose -f docker-compose.slim.yml ps
-    else
-        docker compose ps
-    fi
+    case "$MODE" in
+        slim)    docker compose -f docker-compose.slim.yml ps ;;
+        full)    docker compose ps ;;
+        systemd) systemctl --no-pager list-units 'federator-*' --all ;;
+    esac
 
     echo ""
+    local ok=true
+    check_backend_health || ok=false
+    check_public_health || ok=false
 
-    # Try various ports
-    for port in 443 8443 8444; do
-        if curl -sf "http://localhost:${port}/health" 2>/dev/null; then
-            echo ""
-            log "Health (port ${port}): OK"
-            break
+    if [ "$MODE" = "systemd" ]; then
+        if [ -f "${DATA_DIR}/static/portal.json" ]; then
+            info "Static files: present"
+        else
+            warn "Static files: ${DATA_DIR}/static/portal.json missing (run: systemctl start federator-aggregate.service)"
         fi
-    done
-
-    # Check static files exist (slim mode)
-    if [ -f /data/static/portal.json ] 2>/dev/null; then
-        info "Static files: present"
+    else
+        echo ""
+        info "Container resource usage:"
+        docker stats --no-stream --format "  {{.Name}}: {{.MemUsage}} / CPU {{.CPUPerc}}" 2>/dev/null || true
     fi
 
-    # Show resource usage
-    echo ""
-    info "Container resource usage:"
-    docker stats --no-stream --format "  {{.Name}}: {{.MemUsage}} / CPU {{.CPUPerc}}" 2>/dev/null || true
+    [ "$ok" = true ]
 }
 
 install_systemd() {
     log "Installing systemd units for bare-metal deployment..."
 
-    # Create user
+    for cmd in systemctl python3 tar curl; do
+        if ! command -v "$cmd" &>/dev/null; then
+            err "${cmd} not found; --systemd needs systemd, python3 (with venv), tar and curl."
+            exit 1
+        fi
+    done
+    check_env
+
+    # Service user: owns the data, not the code
     if ! id -u federator &>/dev/null; then
-        sudo useradd -r -s /bin/false -d /opt/federator federator
+        as_root useradd --system --user-group --shell /usr/sbin/nologin             --home-dir "$APP_DIR" --no-create-home federator
         log "Created federator user"
     fi
 
-    # Create directories
-    sudo mkdir -p /opt/federator /data/static/results /data/static/audit
-    sudo chown -R federator:federator /data
+    # Directories: code is root-owned and read-only to the service
+    as_root install -d -m 755 -o root -g root "$APP_DIR"
+    as_root install -d -m 755 -o federator -g federator         "$DATA_DIR" "${DATA_DIR}/static" "${DATA_DIR}/static/results" "${DATA_DIR}/static/audit"
 
-    # Create venv
-    if [ ! -d /opt/federator/venv ]; then
-        sudo -u federator python3 -m venv /opt/federator/venv
-        sudo -u federator /opt/federator/venv/bin/pip install -r requirements-slim.txt
+    # Python venv with the slim dependencies (re-run on every install so an
+    # update picks up new pins)
+    if [ ! -x "${APP_DIR}/venv/bin/python" ]; then
+        as_root python3 -m venv "${APP_DIR}/venv"
         log "Created Python venv"
     fi
+    as_root "${APP_DIR}/venv/bin/pip" install --quiet --no-cache-dir -r requirements-slim.txt
 
-    # Copy application
-    sudo cp -r federator/ /opt/federator/
-    sudo cp .env /opt/federator/.env 2>/dev/null || true
+    # Application: this directory is the `federator` package. Copy it to
+    # ${APP_DIR}/federator without secrets, databases or deployment files
+    # (the same exclusions as .dockerignore), then swap it in.
+    local staging="${APP_DIR}/federator.new"
+    as_root rm -rf "$staging"
+    as_root install -d -m 755 -o root -g root "$staging"
+    tar -C "$SCRIPT_DIR"         --exclude='.env' --exclude='.env.*' --exclude='*.db' --exclude='*.db-*'         --exclude='__pycache__' --exclude='*.pyc' --exclude='Dockerfile*'         --exclude='docker-compose*.yml' --exclude='Caddyfile*' --exclude='deploy.sh'         --exclude='systemd' --exclude='.dockerignore'         -cf - . | as_root tar -C "$staging" --no-same-owner -xf -
+    as_root rm -rf "${APP_DIR}/federator"
+    as_root mv "$staging" "${APP_DIR}/federator"
+    as_root "${APP_DIR}/venv/bin/python" -m compileall -q "${APP_DIR}/federator"
 
-    # Install systemd units
-    sudo cp systemd/federator-writer.socket /etc/systemd/system/
-    sudo cp systemd/federator-writer.service /etc/systemd/system/
-    sudo cp systemd/federator-aggregate.timer /etc/systemd/system/
-    sudo cp systemd/federator-aggregate.service /etc/systemd/system/
+    # Settings: readable by the service, not by other users
+    as_root install -m 640 -o root -g federator .env "${APP_DIR}/.env"
 
-    sudo systemctl daemon-reload
-    sudo systemctl enable --now federator-writer.socket
-    sudo systemctl enable --now federator-aggregate.timer
+    # systemd units
+    for unit in federator-writer.socket federator-writer.service                 federator-aggregate.timer federator-aggregate.service; do
+        as_root install -m 644 -o root -g root "systemd/${unit}" "/etc/systemd/system/${unit}"
+    done
+
+    as_root systemctl daemon-reload
+    as_root systemctl enable --now federator-writer.socket
+    as_root systemctl enable --now federator-aggregate.timer
+    # Pick up new code and settings if the writer was already running
+    as_root systemctl try-restart federator-writer.service
+
+    # The first connection starts the writer, which creates the database;
+    # then publish the initial static files.
+    if check_backend_health; then
+        if as_root systemctl start federator-aggregate.service; then
+            log "Initial aggregation published to ${DATA_DIR}/static"
+        else
+            warn "Initial aggregation failed — check: journalctl -u federator-aggregate"
+        fi
+    else
+        err "The writer did not start — check: journalctl -u federator-writer"
+        exit 1
+    fi
 
     log "Systemd units installed and enabled."
-    info "  Writer:     systemctl status federator-writer.socket"
+    info "  Writer:     systemctl status federator-writer.socket federator-writer.service"
     info "  Aggregator: systemctl status federator-aggregate.timer"
     info "  Logs:       journalctl -u federator-writer -f"
+    info "  Caddy is not installed by this script: install it, use federator/Caddyfile"
+    info "  and set FEDERATOR_DOMAIN in Caddy's environment (see docs/deployment.md)."
 }
 
 # ── Main ─────────────────────────────────────────────────────────────────────
+
+if [ "$MODE" = "systemd" ] && [[ "${1:-setup}" =~ ^-*(setup|update)$ ]]; then
+    err "--setup and --update deploy with Docker; for bare metal run: $0 --systemd"
+    exit 1
+fi
 
 case "${1:-setup}" in
     --setup|setup)     setup ;;
@@ -217,7 +350,8 @@ case "${1:-setup}" in
         echo ""
         echo "  --setup     Deploy (default: slim mode)"
         echo "  --update    Rebuild and restart"
-        echo "  --status    Check health and resource usage"
+        echo "  --status    Check health and resource usage; exits 1 if unhealthy"
+        echo "              (add --full or --systemd for those installs)"
         echo "  --systemd   Install systemd units (bare metal, no Docker)"
         echo "  --full      Use full FastAPI stack instead of slim mode"
         exit 1

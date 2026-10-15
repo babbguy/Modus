@@ -152,6 +152,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `*` or an empty value stopped the service at startup with a
   `SettingsError`: only a JSON list worked. They are now parsed as the
   orchestrator parses `MODUS_CORS_ORIGINS`, and a JSON list still works.
+- **Federator bare-metal install (`deploy.sh --systemd`).** It never
+  completed: it created the virtualenv as the `federator` user in a
+  root-owned `/opt/federator` (permission denied), then copied a
+  `federator/` directory that does not exist where the script runs. The
+  writer unit could not have run either: it passed uvicorn `--fd 0`, which is
+  stdin, not the socket systemd hands over (fd 3), and it was `Type=notify`
+  with a watchdog, which uvicorn never signals, so systemd killed it after
+  the start timeout. The script now installs the package without secrets or
+  deployment files, a root-owned virtualenv, `.env` readable only by the
+  service and the units, then starts the writer and publishes the first
+  static files; re-running it updates an install and keeps the data. The
+  writer unit is `Type=exec` with `--fd 3` and `Restart=on-failure`, and
+  requires `/opt/federator/.env`. The slim writer now refuses to start
+  without `FEDERATOR_JWT_SECRET`, as the full service does, instead of
+  starting and answering every submission with 401.
+- **Federator `deploy.sh --status`.** It requested `http://localhost:443`,
+  plain HTTP on Caddy's TLS port, which always fails, and reported nothing
+  when no check passed. It now checks the service on the address it listens
+  on and `https://<FEDERATOR_DOMAIN>/health` through Caddy, reports each
+  result, and exits non-zero if a check fails. `--status --systemd` checks a
+  bare-metal install. `--setup` waits for the same checks.
 
 ## [1.1.0] - 2026-10-09
 
