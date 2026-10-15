@@ -55,6 +55,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `alembic.ini` uses `path_separator` instead of the deprecated
     `version_path_separator`.
 
+### Fixed
+
+- **SDK route discovery on FastAPI 0.137 and later.** FastAPI 0.137 keeps
+  each included router as a single entry in `app.routes` and builds its
+  routes lazily, so the SDK's topology scan reported only the routes declared
+  directly on the app and missed every route in an included router, AI
+  endpoints included. Discovery now expands included routers, nested ones
+  too, with their full prefixed paths, on every FastAPI version. The SDK
+  still imports nothing outside the standard library.
+
 ## [1.1.0] - 2026-10-09
 
 ### Added
