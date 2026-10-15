@@ -413,12 +413,14 @@ in both modes), `DATABASE_URL`, `PORT` (default 8443),
 Orchestrator:
 
 - `GET /health`: liveness
-- `GET /ready`: readiness (includes a database check)
+- `GET /ready`: readiness: 200 when the database answers, 503 otherwise
 - `GET /metrics`: Prometheus metrics (`MODUS_METRICS_ENABLED`, on by default)
 
 Conductor:
 
-- `GET /healthz`: liveness (the image's and the Compose file's health check)
-- `GET /ready`: readiness
+- `GET /healthz`: liveness (the image's and the Compose file's health check,
+  so a database outage does not restart the container)
+- `GET /ready`: readiness: 200 when the database answers, 503 with
+  `"status": "not_ready"` otherwise
 
 Federator: `GET /health` (liveness) and, in full mode, `GET /ready`.

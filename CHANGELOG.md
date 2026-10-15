@@ -173,6 +173,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on and `https://<FEDERATOR_DOMAIN>/health` through Caddy, reports each
   result, and exits non-zero if a check fails. `--status --systemd` checks a
   bare-metal install. `--setup` waits for the same checks.
+- **Conductor readiness.** `GET /ready` answered 200 with
+  `"status": "not_ready"` when the database was down, so a load balancer or
+  readiness probe kept sending traffic to it, and 500 before the database was
+  initialised. It now answers 503, as the orchestrator does, and logs the
+  cause. The Compose and image health checks probe `/healthz` and are
+  unchanged, so a database outage does not restart the container.
 
 ## [1.1.0] - 2026-10-09
 

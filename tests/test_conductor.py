@@ -100,6 +100,33 @@ async def test_readiness(conductor_client):
     assert data["orchestrators_registered"] == 0
 
 
+@pytest.mark.asyncio
+async def test_readiness_is_503_when_database_is_down(conductor_client, tmp_path):
+    # A database the Conductor cannot open: its directory does not exist.
+    unreachable = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'missing' / 'conductor.db'}")
+    conductor_session._session_factory = async_sessionmaker(unreachable, class_=AsyncSession)
+    try:
+        resp = await conductor_client.get("/ready")
+    finally:
+        await unreachable.dispose()
+    assert resp.status_code == 503
+    data = resp.json()
+    assert data["status"] == "not_ready"
+    assert data["reason"] == "database_unavailable"
+    assert data["service"] == "conductor"
+
+    # Liveness stays up: the container is not restarted for a database outage.
+    assert (await conductor_client.get("/healthz")).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_readiness_is_503_before_database_init(conductor_client):
+    conductor_session._session_factory = None
+    resp = await conductor_client.get("/ready")
+    assert resp.status_code == 503
+    assert resp.json()["status"] == "not_ready"
+
+
 # ── Orchestrator Registration ──────────────────────────────────────────────────
 
 
