@@ -36,6 +36,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 logger = logging.getLogger(__name__)
 
 from orchestrator.core.auth import Identity, get_identity
+from orchestrator.core.secret_hash import secret_matches
 from orchestrator.core.invitation_service import (
     InvitationMessage,
     get_configured_channels,
@@ -595,7 +596,7 @@ async def accept_invitation(
 
     matched_inv = None
     for inv in pending:
-        if await asyncio.to_thread(bcrypt.checkpw, body.token.encode(), inv.token_hash.encode()):
+        if await asyncio.to_thread(secret_matches, body.token, inv.token_hash):
             matched_inv = inv
             break
 

@@ -46,6 +46,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from orchestrator.core.auth import Identity, get_identity, get_app_identity
+from orchestrator.core.secret_hash import secret_matches
 from orchestrator.db.models import App, AppTopology, AuditLog, Team
 from orchestrator.db.session import get_session
 from orchestrator.api.ingest import _verify_app_key
@@ -94,9 +95,7 @@ async def _resolve_team_token(raw_token: str, db: AsyncSession) -> Optional[Team
         return None
 
     try:
-        if await asyncio.to_thread(
-            bcrypt.checkpw, raw_token.encode(), team.registration_token_hash.encode()
-        ):
+        if await asyncio.to_thread(secret_matches, raw_token, team.registration_token_hash):
             return team
     except ValueError as exc:
         # Malformed stored hash — fail closed but leave an audit trail.

@@ -29,6 +29,11 @@ from urllib.parse import urlparse
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from orchestrator.core.secret_hash import BCRYPT_MAX_BYTES
+
+# An app key is api_key_prefix plus this many random characters.
+APP_KEY_RANDOM_CHARS = 32
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -536,6 +541,16 @@ class Settings(BaseSettings):
                     "Generate a real key with: python -c \"import secrets; "
                     "print('mds_master_' + secrets.token_urlsafe(32))\""
                 )
+        return v
+
+    @field_validator("api_key_prefix")
+    @classmethod
+    def validate_api_key_prefix(cls, v: str) -> str:
+        # App keys are stored as bcrypt hashes, and bcrypt checks at most
+        # BCRYPT_MAX_BYTES bytes, so the prefix must leave room for the key.
+        limit = BCRYPT_MAX_BYTES - APP_KEY_RANDOM_CHARS
+        if len(v.encode()) > limit:
+            raise ValueError(f"MODUS_API_KEY_PREFIX must be at most {limit} bytes.")
         return v
 
 

@@ -22,7 +22,6 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
-import bcrypt
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import select
@@ -30,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from orchestrator.core.auth import get_app_identity
 from orchestrator.core.config import settings
+from orchestrator.core.secret_hash import secret_matches
 from orchestrator.db.models import App
 from orchestrator.db.session import get_session
 from orchestrator.metrics.prometheus import (
@@ -473,10 +473,8 @@ async def _verify_stable_key(raw_key: str, db: AsyncSession):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key.")
 
     # Bcrypt in thread pool — blocks ~250ms, keeps event loop free
-    key_bytes = raw_key.encode()
-    hash_bytes = app.api_key_hash.encode()
     valid = await _asyncio.get_running_loop().run_in_executor(
-        None, bcrypt.checkpw, key_bytes, hash_bytes
+        None, secret_matches, raw_key, app.api_key_hash
     )
     if not valid:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key.")
