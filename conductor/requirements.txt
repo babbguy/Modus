@@ -22,7 +22,7 @@ pydantic-settings==2.6.0
 # ── Security ───────────────────────────────────────────────────────────────────
 bcrypt==4.2.0
 PyJWT[crypto]==2.9.0
-cryptography==44.0.0
+cryptography==50.0.0
 
 # ── Observability ─────────────────────────────────────────────────────────────
 prometheus-client==0.21.0
