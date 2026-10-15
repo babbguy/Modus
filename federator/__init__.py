@@ -10,3 +10,5 @@ constitution deltas using only unencrypted metadata signals
 
 Orchestrators opt in explicitly through their local settings.
 """
+
+__version__ = "1.0.0"

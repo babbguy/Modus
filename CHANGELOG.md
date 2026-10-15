@@ -95,6 +95,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whose `sub` claim is not a string is now refused (401), as on the
   orchestrator.
 
+- **Conductor in `deploy/docker-compose.prod.yml` (org-wide mode).** The
+  Conductor reads `CONDUCTOR_*` variables, but the Compose file passed it
+  `MODUS_DATABASE_URL` and `MODUS_PORT`, which it ignored. In production it
+  then saw no push secret and stub auth and refused to start, so
+  `install.sh --org-wide` left it restarting; with those set, its database
+  went to `/app/conductor.db` in the container's writable layer instead of
+  the `conductor_data` volume, and was lost when the container was
+  recreated. The Compose file now maps the shared `.env` onto the
+  Conductor's own variables: `MODUS_CONDUCTOR_DATABASE_URL` (default: SQLite
+  on the volume), `MODUS_ENVIRONMENT`, `MODUS_AUTH_MODE`, `MODUS_JWT_SECRET`
+  and `MODUS_CONDUCTOR_SECRET`, the secret Orchestrators push with.
+  `install.sh --org-wide` generates `MODUS_CONDUCTOR_SECRET` when it is not
+  set. Any other `CONDUCTOR_*` setting can go in `deploy/.env` as-is. The
+  image's database also defaults to the `/app/data` volume.
+  `CONDUCTOR_DATABASE_URL` works as before.
+- **Conductor health check.** The image and the Compose file probed
+  `/health`, which the Conductor does not serve, so the container was always
+  `unhealthy`. They now probe its liveness route, `/healthz`.
+- **Federator images.** Both failed with their own Compose files. The full
+  image copied the files to `/app` without the `federator` package directory,
+  so `uvicorn federator.main:app` failed with `ModuleNotFoundError`; the slim
+  image's `COPY federator/` did not exist in its build context. Both now copy
+  the package to `federator/`, and a `.dockerignore` keeps `.env` (which the
+  full image used to include, `FEDERATOR_JWT_SECRET` and all) and the
+  deployment files out. In slim mode:
+  - the aggregator imported `federator.config`, which needs pydantic, absent
+    from the slim image, so it never wrote the static files Caddy serves;
+  - Caddy proxied writes to `localhost:8444`, its own container, instead of
+    the writer;
+  - per-industry results (`/v1/results/<industry>`) were always 404, because
+    of a wrong rewrite in the `Caddyfile`;
+  - the writer refused every token carrying the issuer and audience the full
+    service requires. It now checks `FEDERATOR_JWT_ISSUER` and
+    `FEDERATOR_JWT_AUDIENCE` (same defaults as the full service), so tokens
+    without them are refused, as in full mode.
+
+  The full Compose file now reads `federator/.env` (documented settings such
+  as `FEDERATOR_CORS_ORIGINS` never reached the service) and its Caddy proxies
+  to the federator (`Caddyfile.full`) instead of using the slim-mode routes.
+  Both Compose files take the domain from `FEDERATOR_DOMAIN` in `.env`
+  instead of an edit to the `Caddyfile`.
+- **Comma-separated CORS origins.** `CONDUCTOR_CORS_ORIGINS` and
+  `FEDERATOR_CORS_ORIGINS` set to a comma-separated list, a single origin,
+  `*` or an empty value stopped the service at startup with a
+  `SettingsError`: only a JSON list worked. They are now parsed as the
+  orchestrator parses `MODUS_CORS_ORIGINS`, and a JSON list still works.
+
 ## [1.1.0] - 2026-10-09
 
 ### Added
