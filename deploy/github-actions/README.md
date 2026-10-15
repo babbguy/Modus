@@ -12,9 +12,13 @@ cluster or GitHub repository.
 The templates and the composite actions in `github-action/` use the same
 action versions as this repository's own workflows (checkout 7, setup-python 7,
 github-script 9, docker setup-buildx 4 and build-push 7), each pinned to a full
-commit SHA with its version in a comment. These run on Node 24, so on
-**self-hosted runners they need GitHub Actions runner 2.327.1 or later**.
-GitHub-hosted runners already qualify.
+commit SHA with its version in a comment. `deploy-orchestrator.yml` also uses
+aws-actions/configure-aws-credentials 6, aws-actions/amazon-ecr-login 2,
+docker/metadata-action 6 and azure/setup-helm 5, pinned the same way. All of
+these run on Node 24, so on **self-hosted runners they need GitHub Actions
+runner 2.327.1 or later**. GitHub-hosted runners already qualify.
+`register-app.yml` uses the GitHub CLI (`gh`), which GitHub-hosted runners
+include; install it on self-hosted runners.
 
 If you add your own `actions/github-script` steps next to these: since v9,
 `require('@actions/github')` fails, and `getOctokit` is passed into the
@@ -27,10 +31,11 @@ shipped here use neither.
 **Where:** copy to a platform-admin repo or an app repo and run it manually.
 **What it does:** calls `POST /api/v1/apps/register` with the master key and
 stores the returned app key and app id as repository secrets
-(`MODUS_API_KEY`, `MODUS_APP_ID`) using a PAT.
+(`MODUS_API_KEY`, `MODUS_APP_ID`) with `gh secret set`, using a PAT.
 
 **Required secrets:** `MODUS_MASTER_KEY`, `MODUS_URL`, `GH_PAT_SECRETS_WRITE`
-(a PAT that can write repository secrets).
+(a PAT that can write this repository's Actions secrets: fine-grained with
+"Secrets: Read and write" on the repository, or classic with `repo` scope).
 
 Inputs: `team_slug`, `app_id` (a slug), `app_name`, `environment`. It sends
 `app_id`, `app_name`, `team_slug`, `environment` with `X-Modus-APIKey`, as the

@@ -192,6 +192,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a release whose version differs from the source's, and CI checks that the
   orchestrator, Conductor and SDK versions agree (`scripts/check_versions.py`).
   `MODUS_VERSION` still selects the image tag.
+- **Remaining customer action templates.** `deploy-orchestrator.yml` and
+  `register-app.yml` still used tag-pinned actions on old runtimes, two of
+  which no longer run on current GitHub runners: azure/setup-helm v3 (Node
+  16) and gliech/create-github-secret-action v1 (Node 12). Now
+  aws-actions/configure-aws-credentials 6.3.0 (was v4, Node 20),
+  aws-actions/amazon-ecr-login 2.1.7 (still the latest major),
+  docker/metadata-action 6.2.0 (was v5, Node 20) and azure/setup-helm 5.0.1,
+  each pinned to a full commit SHA with its version in a comment; every
+  step's inputs exist in the pinned version. gliech/create-github-secret-action
+  has had no release since 2022 and has no Node 20 or 24 version, so
+  `register-app.yml` now stores `MODUS_API_KEY` and `MODUS_APP_ID` with
+  `gh secret set`, preinstalled on GitHub-hosted runners, using the same
+  `GH_PAT_SECRETS_WRITE` token and the same repository, with the values on
+  stdin. The production smoke test in `deploy-orchestrator.yml` expected
+  `/ready` to answer `"status": "ready"`, but the orchestrator answers `"ok"`,
+  so every production deploy failed its smoke test; it now checks for `"ok"`.
 
 ## [1.1.0] - 2026-10-09
 
