@@ -423,4 +423,11 @@ Conductor:
 - `GET /ready`: readiness: 200 when the database answers, 503 with
   `"status": "not_ready"` otherwise
 
+The `version` these endpoints report is the version the image was built as
+(the `MODUS_BUILD_VERSION` build argument, which the published images carry,
+also in the `org.opencontainers.image.version` label), or the version of the
+source for an image built without it, such as `docker compose up --build`
+from a checkout. `MODUS_VERSION` in `deploy/.env` only selects the image tag
+and does not change it.
+
 Federator: `GET /health` (liveness) and, in full mode, `GET /ready`.

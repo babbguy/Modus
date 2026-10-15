@@ -28,3 +28,5 @@ start-dev.bat
 CLAUDE.md
 .claude/
 demo/
+# Written only inside images, from the MODUS_BUILD_VERSION build argument
+**/BUILD_VERSION

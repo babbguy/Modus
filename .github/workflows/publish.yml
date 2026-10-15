@@ -95,12 +95,22 @@ jobs:
             echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
             echo "is_release=true" >> "$GITHUB_OUTPUT"
           elif [[ -n "${{ inputs.version }}" ]]; then
-            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+            VERSION="${{ inputs.version }}"
+            VERSION="${VERSION#v}"
+            echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
             echo "is_release=true" >> "$GITHUB_OUTPUT"
           else
             echo "version=latest" >> "$GITHUB_OUTPUT"
             echo "is_release=false" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Release version matches the source
+        # The image reports the version it is built as (MODUS_BUILD_VERSION);
+        # it must be the version of the code inside it.
+        if: steps.version.outputs.is_release == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: python3 scripts/check_versions.py "$VERSION"
 
       - name: Generate image tags
         id: tags
@@ -133,6 +143,9 @@ jobs:
           # A tag push always publishes; a manual run can build without pushing.
           push: ${{ !inputs.dry_run }}
           tags: ${{ steps.tags.outputs.tags }}
+          # The version /health reports. Non-release builds report the source version.
+          build-args: |
+            MODUS_BUILD_VERSION=${{ steps.version.outputs.is_release == 'true' && steps.version.outputs.version || '' }}
           cache-from: type=gha,scope=${{ matrix.component }}
           cache-to: type=gha,mode=max,scope=${{ matrix.component }}
           labels: |

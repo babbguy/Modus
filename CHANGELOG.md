@@ -179,6 +179,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   initialised. It now answers 503, as the orchestrator does, and logs the
   cause. The Compose and image health checks probe `/healthz` and are
   unchanged, so a database outage does not restart the container.
+- **Reported version.** Under `deploy/`, the orchestrator's `/health`,
+  `/ready` and `/version` reported `"version": "latest"`: `MODUS_VERSION` in
+  `.env` is the image tag, and the Compose file passes `.env` to the
+  container, where it also set the orchestrator's `version` setting. The
+  Conductor reported `1.0.0` whatever it was. The version is no longer a
+  setting: the Dockerfiles take a `MODUS_BUILD_VERSION` build argument,
+  check that it is a version, write it into the image and set the
+  `org.opencontainers.image.version` label, and the services report it. An
+  image built without it (such as `docker compose up --build`) reports the
+  version of its source. `publish.yml` passes the release version and fails
+  a release whose version differs from the source's, and CI checks that the
+  orchestrator, Conductor and SDK versions agree (`scripts/check_versions.py`).
+  `MODUS_VERSION` still selects the image tag.
 
 ## [1.1.0] - 2026-10-09
 
