@@ -11,13 +11,13 @@ uvloop==0.23.0; sys_platform != "win32"  # fast event loop (Linux/macOS only)
 
 # ── Database ───────────────────────────────────────────────────────────────────
 sqlalchemy[asyncio]==2.0.54
-asyncpg==0.31.0                     # async PostgreSQL driver
+asyncpg==0.32.0                     # async PostgreSQL driver
 aiosqlite==0.22.1                   # async SQLite driver (zero-config deploy)
 alembic==1.20.0
 psycopg2-binary==2.9.13             # for alembic CLI (sync)
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-pydantic==2.13.5
+pydantic==2.14.1
 pydantic-settings==2.15.0
 
 # ── Security ───────────────────────────────────────────────────────────────────
