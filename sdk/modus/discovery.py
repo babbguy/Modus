@@ -589,10 +589,33 @@ def _git_repo_name() -> Optional[str]:
 
 # ── Route extraction ───────────────────────────────────────────────────────────
 
+def _flatten_fastapi_routes(app_obj) -> list:
+    """Return the app's routes with every included router expanded.
+
+    FastAPI 0.136 and earlier copy each included route into ``app.routes``.
+    From 0.137, an included router is one node in ``app.routes`` and its routes
+    are built lazily. Every 0.137+ release gives that node
+    ``effective_route_contexts()``, which yields each route of the router and
+    of its nested routers with the effective (prefixed) path; a WebSocket or
+    plain Starlette route is carried as ``starlette_route``. The public
+    ``fastapi.routing.iter_route_contexts`` is not used: it is missing before
+    0.137.2 and reports an empty path for those routes before 0.143.1.
+    """
+    flat = []
+    for route in getattr(app_obj, "routes", None) or []:
+        # Looked up on the class: a mock route answers every attribute.
+        if callable(getattr(type(route), "effective_route_contexts", None)):
+            for context in route.effective_route_contexts():
+                flat.append(getattr(context, "starlette_route", None) or context)
+        else:
+            flat.append(route)
+    return flat
+
+
 def _extract_fastapi_routes(app_obj) -> list[dict]:
     routes = []
     try:
-        for route in getattr(app_obj, "routes", []):
+        for route in _flatten_fastapi_routes(app_obj):
             path = getattr(route, "path", None)
             if not path or path in ("/openapi.json", "/redoc", "/docs"):
                 continue
