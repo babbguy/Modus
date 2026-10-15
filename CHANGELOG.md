@@ -77,6 +77,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `publish.yml` gains a `dry_run` input for manual runs that builds both
   images without pushing them; tag pushes publish as before.
 
+- **Dependabot.** Python version updates now also cover `conductor/` and
+  `federator/`, in the same monthly group as the orchestrator. Two upgrades
+  are held back by documented ignore rules, each with the condition for
+  revisiting it: FastAPI 0.137+ (lazy route tables built on the event loop)
+  and SQLAlchemy 2.1 (needs Python 3.11; Modus supports 3.10). The rules
+  filter version updates only, not security updates.
+
 ## [1.1.0] - 2026-10-09
 
 ### Added
