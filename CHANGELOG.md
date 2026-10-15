@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Signed container images with provenance and an SBOM.** `publish.yml` now
+  signs each pushed image by digest with cosign (Sigstore keyless, using the
+  workflow's GitHub OIDC identity) and creates two GitHub artifact
+  attestations for it, SLSA build provenance and an SPDX SBOM, which are also
+  pushed to the registry next to the image. BuildKit's own unsigned
+  provenance and SBOM manifests are turned off so there is one source of
+  each. `docs/verifying-releases.md` and `SECURITY.md` give the `cosign
+  verify` and `gh attestation verify` commands, and the release notes link
+  to them. A manual dry run builds without pushing or signing.
+- **The SDK is published to PyPI as `modus-agent`.** The new
+  `publish-pypi.yml` builds the sdist and wheel, runs `twine check --strict`
+  and checks that the tag matches `sdk/pyproject.toml`, then publishes from
+  the `pypi` environment with PyPI trusted publishing (no API token) and PEP
+  740 attestations. It publishes on `v*` tags only; a manual run builds and
+  checks. It replaces the `publish-sdk` job in `release.yml`, which needed a
+  `PYPI_TOKEN` secret.
+- **CodeQL and OpenSSF Scorecard.** `codeql.yml` analyses the Python code,
+  the dashboard JavaScript (vendored libraries excluded) and the workflows on
+  pull requests to `develop` and `main` and weekly. `scorecard.yml` runs
+  Scorecard weekly and on pushes to `develop` (Scorecard runs only on the
+  default branch), publishes the results for the README badge and uploads
+  them to code scanning.
+
 ### Changed
 
 - **License.** Starting with v1.2.0, Modus is licensed under the Functional
@@ -65,6 +90,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The shipped `github-script` steps need no changes for v9; a step of your own
   that calls `require('@actions/github')` or declares `getOctokit` with
   `const`/`let` does (see `deploy/github-actions/README.md`).
+- **Base images pinned by digest.** All five Dockerfiles use
+  `python:3.12-slim@sha256:...`, `docker-compose.yml` pins
+  `postgres:16-alpine` and the federator Compose files move from the floating
+  `caddy:2-alpine` to `caddy:2.11.7-alpine`, pinned. Dependabot now watches
+  the Dockerfiles and Compose files (root and `federator/`) and proposes new
+  digests; a newer Python minor or PostgreSQL major is never proposed
+  automatically.
+- **The SDK requires Python 3.10 or newer.** It declared `>=3.9`, but
+  `modus.output_validator` uses `dataclass(slots=True)` and does not import on
+  3.9. The package metadata, README and guides now say 3.10, like the rest of
+  Modus.
+- **Workflow permissions.** The CI, release gate, release and publish
+  workflows now default to a read-only token (`contents: read`); only the
+  jobs that need more ask for it.
+- **SECURITY.md** states the supported versions, reporting through GitHub
+  private vulnerability reporting (now enabled), what to expect from a single
+  maintainer, and how to verify releases.
+- **README.** A shorter quickstart (one container with SQLite) and
+  badges for the release, PyPI and the OpenSSF Scorecard.
 
 ### Fixed
 
@@ -208,6 +252,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stdin. The production smoke test in `deploy-orchestrator.yml` expected
   `/ready` to answer `"status": "ready"`, but the orchestrator answers `"ok"`,
   so every production deploy failed its smoke test; it now checks for `"ok"`.
+- **SDK README, which becomes the PyPI page.** It said the master key is not
+  accepted for creating a team; it is (`X-Modus-APIKey`, in both auth modes).
+  Its link to the deployment guide was relative and would break on PyPI.
+- **Running the production Compose file by hand.** The commands in the header
+  of `deploy/docker-compose.prod.yml` ran `docker compose` without `-f`, which
+  in `deploy/` picks up the repository's root `docker-compose.yml` instead.
+  `install.sh` and `upgrade.sh` were not affected.
+- **Deployment guide** no longer says that no container images are published.
 
 ## [1.1.0] - 2026-10-09
 

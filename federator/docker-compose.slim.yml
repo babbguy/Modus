@@ -13,7 +13,7 @@ services:
   # ── Caddy: TLS + Static File Server ─────────────────────────
   # Serves pre-computed JSON for reads. Zero Python needed.
   caddy:
-    image: caddy:2-alpine
+    image: caddy:2.11.7-alpine@sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f
     container_name: modus-caddy
     restart: always
     ports:

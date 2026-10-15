@@ -11,7 +11,7 @@
 
 ## Before you start
 
-- Python 3.9+ application that calls one of these providers through its
+- Python 3.10+ application that calls one of these providers through its
   official package: OpenAI, Anthropic, AWS Bedrock (`boto3`), Google Gemini
   (`google-genai` or `google-generativeai`), Azure OpenAI, Groq, Mistral,
   Cohere, xAI/Grok
@@ -24,7 +24,8 @@
 ### 1. Install the agent SDK
 
 ```bash
-# From a clone of this repository (the PyPI package is not published yet):
+pip install modus-agent    # from PyPI, published from v1.2.0
+# or, from a clone of this repository:
 pip install ./sdk
 ```
 

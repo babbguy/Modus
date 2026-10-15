@@ -10,6 +10,11 @@
 #   - ghcr.io/<owner>/modus-orchestrator:<version>
 #   - ghcr.io/<owner>/modus-conductor:latest
 #   - ghcr.io/<owner>/modus-conductor:<version>
+#
+# Every pushed image is signed with cosign (keyless: Sigstore with this
+# workflow's GitHub OIDC identity) and gets two GitHub artifact attestations,
+# SLSA build provenance and an SPDX SBOM, which are also pushed to the
+# registry next to the image. docs/verifying-releases.md has the checks.
 # =============================================================================
 
 name: Publish Modus Images
@@ -33,7 +38,6 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 env:
   REGISTRY: ghcr.io
@@ -66,6 +70,11 @@ jobs:
     name: Build & Push
     needs: test
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write      # push the images
+      id-token: write      # OIDC identity for keyless signing and attestations
+      attestations: write  # store the attestations in GitHub
     strategy:
       matrix:
         include:
@@ -88,15 +97,15 @@ jobs:
 
       - name: Extract version
         id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
-          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-            VERSION="${{ github.ref_name }}"
-            VERSION="${VERSION#v}"
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
             echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
             echo "is_release=true" >> "$GITHUB_OUTPUT"
-          elif [[ -n "${{ inputs.version }}" ]]; then
-            VERSION="${{ inputs.version }}"
-            VERSION="${VERSION#v}"
+          elif [[ -n "$INPUT_VERSION" ]]; then
+            VERSION="${INPUT_VERSION#v}"
             echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
             echo "is_release=true" >> "$GITHUB_OUTPUT"
           else
@@ -134,14 +143,21 @@ jobs:
           fi
 
           echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
 
       - name: Build and push ${{ matrix.component }}
+        id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: ${{ matrix.dockerfile }}
           # A tag push always publishes; a manual run can build without pushing.
           push: ${{ !inputs.dry_run }}
+          # Provenance and the SBOM are signed GitHub attestations (below),
+          # which `gh attestation verify` checks; BuildKit's own unsigned
+          # attestation manifests would duplicate them.
+          provenance: false
+          sbom: false
           tags: ${{ steps.tags.outputs.tags }}
           # The version /health reports. Non-release builds report the source version.
           build-args: |
@@ -154,6 +170,47 @@ jobs:
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.licenses=FSL-1.1-ALv2
+
+      # ── Sign and attest the pushed image, by digest ─────────────────────
+      - name: Install cosign
+        if: ${{ !inputs.dry_run }}
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Sign the image (keyless)
+        if: ${{ !inputs.dry_run }}
+        env:
+          IMAGE: ${{ steps.tags.outputs.image }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "${IMAGE}@${DIGEST}"
+
+      - name: Attest build provenance (SLSA)
+        if: ${{ !inputs.dry_run }}
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ steps.tags.outputs.image }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Generate the SBOM (SPDX)
+        if: ${{ !inputs.dry_run }}
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: ${{ steps.tags.outputs.image }}@${{ steps.build.outputs.digest }}
+          registry-username: ${{ github.actor }}
+          registry-password: ${{ secrets.GITHUB_TOKEN }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Attest the SBOM
+        if: ${{ !inputs.dry_run }}
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ steps.tags.outputs.image }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          sbom-path: sbom.spdx.json
+          push-to-registry: true
 
   # ── Verify Deployment Files ──────────────────────────────────────────────
   verify-deploy:

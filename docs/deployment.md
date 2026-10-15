@@ -1,8 +1,10 @@
 # Modus — Deployment Guide
 
-Modus is self-hosted. There are no published container images yet (they are
-produced by the `publish` workflow when a `v*` tag is pushed), so every option
-below builds from a clone of the repository:
+Modus is self-hosted. Each release publishes container images to
+`ghcr.io/babbguy/modus-orchestrator` and `ghcr.io/babbguy/modus-conductor`;
+from v1.2.0 they are signed and carry build provenance and an SBOM (see
+[Verifying releases](verifying-releases.md)). The options below build from a
+clone of the repository:
 
 ```bash
 git clone https://github.com/babbguy/Modus.git
@@ -86,7 +88,12 @@ cd deploy
 ./uninstall.sh [--purge]   # stop containers (--purge also removes data)
 ```
 
-The scripts build from your checkout. `deploy/.env.example` ships
+The scripts build from your checkout. To run the published images instead,
+set `MODUS_VERSION` in `.env` to a release (for example `1.2.0`) and, in
+`deploy/`, run `docker compose -f docker-compose.prod.yml pull` and then
+`docker compose -f docker-compose.prod.yml up -d` (no `--build`); verify the
+images first as described in
+[Verifying releases](verifying-releases.md). `deploy/.env.example` ships
 `MODUS_ENVIRONMENT=production` and `MODUS_AUTH_MODE=jwt`, so set
 `MODUS_JWT_SECRET` (see "Authentication"); the interactive API docs are
 disabled in production mode.

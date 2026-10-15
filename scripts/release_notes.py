@@ -4,7 +4,7 @@ Usage: python scripts/release_notes.py 1.1.0 [--images]
 
 Exits non-zero when the version has no section or the section is empty, so a
 release can never go out with missing notes. --images appends the docker pull
-commands for the published container images.
+commands for the published container images and a link to how to verify them.
 """
 from __future__ import annotations
 
@@ -38,7 +38,11 @@ def main(argv: list[str]) -> int:
     notes = section(CHANGELOG.read_text(encoding="utf-8"), version)
     if "--images" in argv:
         pulls = "\n".join(f"docker pull ghcr.io/babbguy/{name}:{version}" for name in IMAGES)
-        notes += f"\n\n### Container images\n\n```\n{pulls}\n```"
+        notes += (
+            f"\n\n### Container images\n\n```\n{pulls}\n```\n\n"
+            "The images are signed and carry build provenance and an SBOM; see "
+            "[Verifying releases](https://github.com/babbguy/Modus/blob/main/docs/verifying-releases.md)."
+        )
     print(notes)
     return 0
 
