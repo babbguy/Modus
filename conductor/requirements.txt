@@ -2,6 +2,8 @@
 # =================================================
 # The Conductor is lightweight — aggregates data from Orchestrators,
 # serves the org-wide dashboard. No direct LLM or heavy compute.
+# Only what conductor/ imports: no migrations (create_all), no metrics
+# exporter, no password hashing, no form parsing.
 
 # ── Web framework ──────────────────────────────────────────────────────────────
 fastapi==0.115.0
@@ -12,20 +14,11 @@ uvloop==0.21.0; sys_platform != "win32"
 sqlalchemy[asyncio]==2.0.36
 asyncpg==0.30.0
 aiosqlite==0.20.0
-alembic==1.14.0
-psycopg2-binary==2.9.10
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 pydantic==2.10.0
 pydantic-settings==2.6.0
 
 # ── Security ───────────────────────────────────────────────────────────────────
-bcrypt==4.2.0
-PyJWT[crypto]==2.9.0
-cryptography==44.0.0
-
-# ── Observability ─────────────────────────────────────────────────────────────
-prometheus-client==0.21.0
-
-# ── Utilities ─────────────────────────────────────────────────────────────────
-python-multipart==0.0.18
+PyJWT[crypto]==2.9.0                # HS256 and RS256 bearer tokens
+cryptography==44.0.0                # RS256 verification (PyJWT[crypto])
