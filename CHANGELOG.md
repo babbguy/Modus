@@ -54,6 +54,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `InsecureKeyLengthWarning` to the server's error output.
   - `alembic.ini` uses `path_separator` instead of the deprecated
     `version_path_separator`.
+- **GitHub Action and workflow templates upgraded and pinned.** The composite
+  actions (`github-action/action.yml`, `github-action/cost-check/action.yml`)
+  and the templates in `deploy/github-actions/workflows/` now use the same
+  versions as this repository's workflows: setup-python 7 (was 5),
+  github-script 9 (was 7), checkout 7 (was 4), docker setup-buildx 4 (was 3)
+  and build-push 7 (was 5), each pinned to a full commit SHA with its version
+  in a comment. They run on Node 24, so **self-hosted runners need GitHub
+  Actions runner 2.327.1 or later** (GitHub-hosted runners already qualify).
+  The shipped `github-script` steps need no changes for v9; a step of your own
+  that calls `require('@actions/github')` or declares `getOctokit` with
+  `const`/`let` does (see `deploy/github-actions/README.md`).
 
 ### Fixed
 
