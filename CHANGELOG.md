@@ -26,6 +26,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   image label and the dashboard Settings view is now `FSL-1.1-ALv2`, and the
   SDK wheel and sdist now include the license text (`sdk/LICENSE`).
 
+- **Conductor and Federator dependencies.** The Conductor's pins move to the
+  orchestrator's versions (FastAPI 0.136.3, Starlette 1.8, PyJWT 2.15.1,
+  cryptography 50.0.2, SQLAlchemy 2.0.54, pydantic 2.13.5 and the rest),
+  which clears the 36 known advisories in its old set, and drops five
+  packages it never imports (alembic, psycopg2-binary, bcrypt,
+  prometheus-client, python-multipart). The Federator's open version ranges
+  become exact pins at the same versions, so its images no longer pick up
+  whatever is newest at build time. In the Conductor's JWT mode, a token
+  whose `sub` claim is not a string is now refused (401), as on the
+  orchestrator.
+
 ## [1.1.0] - 2026-10-09
 
 ### Added
