@@ -7,6 +7,20 @@ and adapt them. They parse as valid workflows and pass `actionlint` (apart from
 shellcheck style notes), but they have not been run end to end against a live
 cluster or GitHub repository.
 
+## Runner requirements
+
+The templates and the composite actions in `github-action/` use the same
+action versions as this repository's own workflows (checkout 7, setup-python 7,
+github-script 9, docker setup-buildx 4 and build-push 7), each pinned to a full
+commit SHA with its version in a comment. These run on Node 24, so on
+**self-hosted runners they need GitHub Actions runner 2.327.1 or later**.
+GitHub-hosted runners already qualify.
+
+If you add your own `actions/github-script` steps next to these: since v9,
+`require('@actions/github')` fails, and `getOctokit` is passed into the
+script, so a script must not declare it with `const` or `let`. The scripts
+shipped here use neither.
+
 ## Templates
 
 ### 1. `register-app.yml` — one-time app registration
