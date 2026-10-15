@@ -82,15 +82,16 @@ async def test_team_token_generation_hashes_off_the_event_loop(client, monkeypat
 
 
 @pytest.mark.parametrize("path", [
-    "orchestrator/api/apps.py", "orchestrator/api/topology.py", "orchestrator/api/users.py",
+    "orchestrator/api/apps.py", "orchestrator/api/ingest.py", "orchestrator/api/topology.py",
+    "orchestrator/api/users.py",
 ])
 def test_no_inline_bcrypt_in_async_handlers(path):
-    """Every bcrypt hash/check in these handlers goes through asyncio.to_thread."""
+    """Every bcrypt hash/check in these handlers runs in a worker thread."""
     import ast
     import pathlib
 
     tree = ast.parse(pathlib.Path(path).read_text(encoding="utf-8"))
-    slow = {"hashpw", "checkpw", "_hash_key", "_hash_team_token"}
+    slow = {"hashpw", "checkpw", "secret_matches", "_hash_key", "_hash_team_token"}
     offenders = []
     for fn in ast.walk(tree):
         if not isinstance(fn, ast.AsyncFunctionDef):
