@@ -15,5 +15,5 @@ aiosqlite==0.22.1
 PyJWT==2.15.1
 
 # Settings
-pydantic==2.13.5
+pydantic==2.14.1
 pydantic-settings==2.15.0
