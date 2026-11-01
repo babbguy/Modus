@@ -10,15 +10,15 @@ uvicorn[standard]==0.54.0          # includes uvloop, httptools
 uvloop==0.23.0; sys_platform != "win32"  # fast event loop (Linux/macOS only)
 
 # ── Database ───────────────────────────────────────────────────────────────────
-sqlalchemy[asyncio]==2.0.54
+sqlalchemy[asyncio]==2.0.55
 asyncpg==0.32.0                     # async PostgreSQL driver
 aiosqlite==0.22.1                   # async SQLite driver (zero-config deploy)
-alembic==1.20.0
+alembic==1.20.1
 psycopg2-binary==2.9.13             # for alembic CLI (sync)
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-pydantic==2.14.1
-pydantic-settings==2.15.0
+pydantic==2.14.2
+pydantic-settings==2.16.2
 
 # ── Security ───────────────────────────────────────────────────────────────────
 bcrypt==5.0.0                       # password/key hashing
