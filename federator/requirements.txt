@@ -8,12 +8,12 @@ fastapi==0.136.3
 uvicorn[standard]==0.54.0
 
 # Database (async SQLite default, PostgreSQL optional)
-sqlalchemy[asyncio]==2.0.54
+sqlalchemy[asyncio]==2.0.55
 aiosqlite==0.22.1
 
 # Auth
 PyJWT==2.15.1
 
 # Settings
-pydantic==2.14.1
-pydantic-settings==2.15.0
+pydantic==2.14.2
+pydantic-settings==2.16.2

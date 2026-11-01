@@ -11,13 +11,13 @@ uvicorn[standard]==0.54.0
 uvloop==0.23.0; sys_platform != "win32"
 
 # ── Database ───────────────────────────────────────────────────────────────────
-sqlalchemy[asyncio]==2.0.54
+sqlalchemy[asyncio]==2.0.55
 asyncpg==0.32.0
 aiosqlite==0.22.1
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-pydantic==2.14.1
-pydantic-settings==2.15.0
+pydantic==2.14.2
+pydantic-settings==2.16.2
 
 # ── Security ───────────────────────────────────────────────────────────────────
 PyJWT[crypto]==2.15.1               # HS256 and RS256 bearer tokens
